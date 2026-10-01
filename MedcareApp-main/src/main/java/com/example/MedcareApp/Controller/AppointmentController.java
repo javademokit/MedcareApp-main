@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-@CrossOrigin(origins = "*") // Allow CORS for frontend
 @RestController
 @RequestMapping("/api/appointments1")
 public class AppointmentController {

@@ -2,6 +2,8 @@ package com.example.MedcareApp.Entity;
 
 
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.annotation.Id;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
@@ -9,7 +11,10 @@ import java.util.Objects;
 @Document(collection = "user")
 public class user {
 
+    @Id
+    private String id;
     private  String userId;
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private  String password;
     private String emailId;
     private String mobileNo;
@@ -27,6 +32,14 @@ public class user {
 
     public void setUserId(String userId) {
         this.userId = userId;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
     }
 
     public void setPassword(String password) {
@@ -61,7 +74,6 @@ public class user {
     public String toString() {
         return "user{" +
                 "userId='" + userId + '\'' +
-                ", password='" + password + '\'' +
                 ", emailId='" + emailId + '\'' +
                 ", mobileNo='" + mobileNo + '\'' +
                 '}';

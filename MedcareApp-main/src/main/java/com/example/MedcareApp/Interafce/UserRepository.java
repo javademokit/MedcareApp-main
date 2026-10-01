@@ -10,7 +10,7 @@ import java.util.Optional;
 
 @Repository
 public interface UserRepository extends MongoRepository<user, String> {
-    user findByEmailId(String emailId);
+    List<user> findAllByEmailIdIgnoreCase(String emailId);
     List<user> findByUserId(String userId); // ✅ allow multiple users with same userId
     user findByPassword(String password);
     user findByMobileNo(String mobileNo);

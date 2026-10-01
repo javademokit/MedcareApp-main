@@ -1,7 +1,7 @@
 package com.example.MedcareApp.Controller;
 
-import com.example.MedcareApp.entity.Patient;
-import com.example.MedcareApp.repository.PatientRepository;
+import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Interafce.PatientRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -9,7 +9,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/patients")
-@CrossOrigin(origins = "*")
 public class PatientController {
 
     @Autowired

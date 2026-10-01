@@ -10,7 +10,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/daily-updates")
-@CrossOrigin(origins = "*")
 public class DailyUpdateController {
 
     @Autowired

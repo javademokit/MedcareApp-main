@@ -24,5 +24,13 @@ public class Appointment {
     private String time;
     private String reason;
     private String fee;
-    private String AppointmentStatus;
+    private String appointmentStatus;
+
+    public String getAppointmentStatus() {
+        return appointmentStatus;
+    }
+
+    public void setAppointmentStatus(String appointmentStatus) {
+        this.appointmentStatus = appointmentStatus;
+    }
 }

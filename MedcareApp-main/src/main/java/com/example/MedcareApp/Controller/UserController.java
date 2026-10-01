@@ -3,11 +3,21 @@ package com.example.MedcareApp.Controller;
 
 import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.services.UserService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.security.Principal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,42 +25,90 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/users")
-@CrossOrigin(origins = "*")
 public class UserController {
 
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private SecurityContextRepository securityContextRepository;
+
+    @GetMapping("/csrf")
+    public Map<String, String> csrf(CsrfToken csrfToken) {
+        return Map.of("token", csrfToken.getToken());
+    }
+
     @PostMapping("/signup")
     public ResponseEntity<?> createUser(@RequestBody user newUser) {
+        if (newUser.getEmailId() == null || newUser.getEmailId().isBlank()
+                || newUser.getPassword() == null || newUser.getPassword().length() < 12) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", "Enter a valid email and a password of at least 12 characters"
+            ));
+        }
 
-        var createdrecord = ResponseEntity.ok(userService.createUser(newUser));
         Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("message", "Sign up successful!");
-        return ResponseEntity.ok(response);
-
+        try {
+            userService.createUser(newUser);
+            response.put("success", true);
+            response.put("message", "Sign up successful!");
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException exception) {
+            response.put("success", false);
+            response.put("message", exception.getMessage());
+            return ResponseEntity.status(409).body(response);
+        }
     }
 
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody user userRequest) {
-        user existingUser = userService.getUserByEmail(userRequest.getEmailId());
+    public ResponseEntity<?> login(
+            @RequestBody user userRequest,
+            HttpServletRequest request,
+            HttpServletResponse httpResponse) {
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    UsernamePasswordAuthenticationToken.unauthenticated(
+                            userRequest.getEmailId(), userRequest.getPassword()));
+            SecurityContext context = SecurityContextHolder.createEmptyContext();
+            context.setAuthentication(authentication);
+            SecurityContextHolder.setContext(context);
+            securityContextRepository.saveContext(context, request, httpResponse);
 
-        if (existingUser != null && existingUser.getPassword().equals(userRequest.getPassword())) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "Login successful");
-            response.put("user", Map.of(
-                    "username", existingUser.getUserId(),
-                    "emailId", existingUser.getEmailId()
-            ));
-            return ResponseEntity.ok(response);
+            Map<String, Object> responseBody = new HashMap<>();
+            responseBody.put("success", true);
+            responseBody.put("message", "Login successful");
+            responseBody.put("user", Map.of("username", authentication.getName()));
+            return ResponseEntity.ok(responseBody);
+        } catch (AuthenticationException exception) {
+            return ResponseEntity.status(401)
+                    .body(Map.of("success", false, "message", "Invalid email or password"));
         }
+    }
 
-        return ResponseEntity
-                .status(HttpStatus.UNAUTHORIZED)
-                .body(Map.of("unsuccessfull", false, "message", "Invalid credentials"));
+    @GetMapping("/me")
+    public ResponseEntity<?> currentUser(Principal principal) {
+        user currentUser = userService.getUserByEmail(principal.getName());
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body(Map.of("message", "Account is unavailable"));
+        }
+        return ResponseEntity.ok(Map.of(
+                "username", currentUser.getUserId(),
+                "emailId", currentUser.getEmailId()
+        ));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(HttpServletRequest request) {
+        SecurityContextHolder.clearContext();
+        if (request.getSession(false) != null) {
+            request.getSession(false).invalidate();
+        }
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping
