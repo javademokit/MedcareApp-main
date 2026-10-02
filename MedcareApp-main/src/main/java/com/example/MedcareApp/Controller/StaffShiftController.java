@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,6 +37,16 @@ public class StaffShiftController {
     @PutMapping("/{id}")
     public StaffShift updateShift(@PathVariable String id, @Valid @RequestBody StaffShift shift) {
         return staffShiftService.updateShift(id, shift);
+    }
+
+    @PostMapping("/{id}/check-in")
+    public StaffShift checkInDoctor(@PathVariable String id) {
+        return staffShiftService.checkInDoctor(id);
+    }
+
+    @PostMapping("/{id}/check-out")
+    public StaffShift checkOutDoctor(@PathVariable String id) {
+        return staffShiftService.checkOutDoctor(id);
     }
 
     @DeleteMapping("/{id}")

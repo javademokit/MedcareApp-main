@@ -8,6 +8,7 @@ public class MedicalTest {
     @Id
     private String id;
 
+    private String patientId;
     private String patientName;
     private int age;
     private String gender;
@@ -57,6 +58,14 @@ public class MedicalTest {
 
     public String getPatientName() {
         return patientName;
+    }
+
+    public String getPatientId() {
+        return patientId;
+    }
+
+    public void setPatientId(String patientId) {
+        this.patientId = patientId;
     }
 
     public void setPatientName(String patientName) {

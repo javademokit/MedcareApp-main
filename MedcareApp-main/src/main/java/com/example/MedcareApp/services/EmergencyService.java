@@ -1,7 +1,9 @@
 package com.example.MedcareApp.services;
 
+import com.example.MedcareApp.Entity.Patient;
 import com.example.MedcareApp.Entity.emergency.EmergencyCase;
 import com.example.MedcareApp.Interafce.EmergencyCaseRepository;
+import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.web.EmergencyCaseUpdate;
 import java.time.Instant;
 import java.util.List;
@@ -20,6 +22,7 @@ public class EmergencyService {
     private static final Set<String> TRANSFER_STATUSES = Set.of("NOT_REQUIRED", "REQUESTED", "IN_TRANSIT", "COMPLETED");
 
     private final EmergencyCaseRepository repository;
+    private final PatientRepository patientRepository;
 
     public List<EmergencyCase> getCases() {
         return repository.findAllByOrderByCreatedAtDesc();
@@ -27,6 +30,18 @@ public class EmergencyService {
 
     public EmergencyCase createCase(EmergencyCase emergencyCase) {
         validateChoice(emergencyCase.getSeverity(), SEVERITIES, "severity");
+        if (emergencyCase.getPatientId() == null || emergencyCase.getPatientId().isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Patient ID is required");
+        }
+        List<Patient> patients = patientRepository.findAllByPatientId(emergencyCase.getPatientId());
+        if (patients.isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Patient ID not found");
+        }
+        if (patients.size() != 1) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.CONFLICT, "Patient ID is not unique");
+        }
+        emergencyCase.setPatientName(patients.get(0).getPatientName());
         emergencyCase.setStatus("WAITING_FOR_TRIAGE");
         emergencyCase.setCriticalAlert("CRITICAL".equals(emergencyCase.getSeverity()));
         if (!emergencyCase.isAmbulanceRequired()) emergencyCase.setAmbulanceStatus("NOT_REQUIRED");

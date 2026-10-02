@@ -1,0 +1,173 @@
+package com.example.MedcareApp.services;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.example.MedcareApp.Entity.Appointment;
+import com.example.MedcareApp.Entity.AppointmentSlotReservation;
+import com.example.MedcareApp.Entity.Doctor;
+import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Interafce.AppointmentRepository;
+import com.example.MedcareApp.Interafce.AppointmentSlotReservationRepository;
+import com.example.MedcareApp.Interafce.DoctorRepository;
+import com.example.MedcareApp.Interafce.PatientRepository;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.dao.DuplicateKeyException;
+
+@ExtendWith(MockitoExtension.class)
+class AppointmentServiceTest {
+    @Mock private AppointmentRepository appointmentRepository;
+    @Mock private AppointmentSlotReservationRepository slotReservationRepository;
+    @Mock private DoctorRepository doctorRepository;
+    @Mock private PatientRepository patientRepository;
+    @InjectMocks private AppointmentService service;
+
+    @Test
+    void bookingNewPatientCreatesOneRecordAndReturnsItsCanonicalId() {
+        prepareDoctorAndSlot();
+        when(patientRepository.findAllByPatientmobileNo("5551234")).thenReturn(List.of());
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Appointment request = appointment();
+
+        Appointment booked = service.bookAppointment(request);
+
+        assertTrue(booked.getPatientId().matches("PT-[A-F0-9]{32}"));
+        assertEquals(booked.getPatientId(), request.getPatientId());
+        assertEquals("doctor-profile-1", booked.getDoctorId());
+        assertEquals("pending", booked.getAppointmentStatus());
+        verify(patientRepository).save(any(Patient.class));
+        verify(appointmentRepository).save(request);
+    }
+
+    @Test
+    void bookingExistingPatientUsesStoredDemographicsAndId() {
+        prepareDoctorAndSlot();
+        Patient patient = new Patient();
+        patient.setPatientId("PT-EXISTING");
+        patient.setPatientName("Existing Patient");
+        patient.setPatientAge("37");
+        patient.setGender("Female");
+        patient.setPatientmobileNo("5551234");
+        when(patientRepository.findAllByPatientId("PT-EXISTING")).thenReturn(List.of(patient));
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Appointment request = appointment();
+        request.setPatientId("PT-UNTRUSTED");
+        request.setPatientName("Untrusted edited name");
+        request.setMobileNo("0000000");
+
+        Appointment booked = service.bookForPatient("PT-EXISTING", request);
+
+        assertEquals("PT-EXISTING", booked.getPatientId());
+        assertEquals("Existing Patient", booked.getPatientName());
+        assertEquals("5551234", booked.getMobileNo());
+    }
+
+    @Test
+    void bookingCannotCreateDuplicatePatientByNameAndPhone() {
+        prepareDoctorAndSlot();
+        Patient patient = new Patient();
+        patient.setPatientName("A Patient");
+        when(patientRepository.findAllByPatientmobileNo("5551234")).thenReturn(List.of(patient));
+
+        assertThrows(ResponseStatusException.class, () -> service.bookAppointment(appointment()));
+    }
+
+    @Test
+    void bookingCannotDoubleBookAnActiveDoctorSlot() {
+        Appointment existing = new Appointment();
+        existing.setAppointmentStatus("confirmed");
+        Doctor doctor = new Doctor();
+        doctor.setDoctorName("Dr. Example");
+        doctor.setDoctorAvailabletime(List.of("10:00 AM"));
+        doctor.setId("doctor-profile-1");
+        when(doctorRepository.findById("doctor-profile-1")).thenReturn(Optional.of(doctor));
+        when(appointmentRepository.findAllByDoctorAndDateAndTime(
+                "Dr. Example", appointment().getDate(), "10:00 AM")).thenReturn(List.of(existing));
+
+        assertThrows(ResponseStatusException.class, () -> service.bookAppointment(appointment()));
+    }
+
+    @Test
+    void availableTimesExcludeBookedSlotsAndKeepCancelledSlots() {
+        String date = LocalDate.now().plusDays(1).toString();
+        Doctor doctor = new Doctor();
+        doctor.setId("doctor-profile-1");
+        doctor.setDoctorName("Dr. Example");
+        doctor.setDoctorAvailabletime(List.of("10:00 AM", "10:30 AM"));
+        when(doctorRepository.findById("doctor-profile-1")).thenReturn(Optional.of(doctor));
+        when(doctorRepository.findAllByDoctorName("Dr. Example")).thenReturn(List.of(doctor));
+        Appointment booked = new Appointment();
+        booked.setTime("10:00 AM");
+        booked.setAppointmentStatus("confirmed");
+        Appointment cancelled = new Appointment();
+        cancelled.setTime("10:30 AM");
+        cancelled.setAppointmentStatus("cancelled");
+        when(appointmentRepository.findAllByDoctorIdAndDateOrderByTimeAsc("doctor-profile-1", date))
+                .thenReturn(List.of(booked, cancelled));
+
+        assertEquals(List.of("10:30 AM"), service.getAvailableTimes("doctor-profile-1", date));
+    }
+
+    @Test
+    void concurrentSlotReservationConflictPreventsSecondBooking() {
+        prepareDoctorAndSlot();
+        when(slotReservationRepository.insert(any(AppointmentSlotReservation.class)))
+                .thenThrow(new DuplicateKeyException("occupied"));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class, () -> service.bookAppointment(appointment()));
+
+        assertEquals(409, exception.getStatusCode().value());
+        verify(appointmentRepository, org.mockito.Mockito.never()).save(any(Appointment.class));
+    }
+
+    @Test
+    void cancellingAppointmentReleasesItsSlotReservation() {
+        Appointment appointment = appointment();
+        appointment.setId("appointment-1");
+        appointment.setPatientId("PT-EXISTING");
+        when(appointmentRepository.findById("appointment-1")).thenReturn(Optional.of(appointment));
+        when(appointmentRepository.save(appointment)).thenReturn(appointment);
+
+        service.updateStatus("appointment-1", "cancelled");
+
+        verify(slotReservationRepository).deleteById(any(String.class));
+    }
+
+    private Appointment appointment() {
+        Appointment appointment = new Appointment();
+        appointment.setPatientName("A Patient");
+        appointment.setPatientAge("37");
+        appointment.setGender("Female");
+        appointment.setMobileNo("5551234");
+        appointment.setDoctorId("doctor-profile-1");
+        appointment.setDoctor("Dr. Example");
+        appointment.setDate(LocalDate.now().plusDays(1).toString());
+        appointment.setTime("10:00 AM");
+        return appointment;
+    }
+
+    private void prepareDoctorAndSlot() {
+        Doctor doctor = new Doctor();
+        doctor.setDoctorName("Dr. Example");
+        doctor.setId("doctor-profile-1");
+        doctor.setDoctorfee(500);
+        doctor.setDoctorAvailabletime(List.of("10:00 AM"));
+        when(doctorRepository.findById("doctor-profile-1")).thenReturn(Optional.of(doctor));
+        when(appointmentRepository.findAllByDoctorAndDateAndTime(any(), any(), any())).thenReturn(List.of());
+    }
+}

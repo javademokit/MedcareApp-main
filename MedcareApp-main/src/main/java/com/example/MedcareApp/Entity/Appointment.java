@@ -12,6 +12,7 @@ public class Appointment {
     @Id
     private String id = UUID.randomUUID().toString();
 
+    private String patientId;
     private String patientName;
     private String gender;
     private String patientAge;
@@ -19,12 +20,13 @@ public class Appointment {
     private String patientEmailId;
     private String patientAddress;
 
+    private String doctorId;
     private String doctor;
     private String date;
     private String time;
     private String reason;
     private String fee;
-    private String appointmentStatus;
+    private String appointmentStatus = "pending";
 
     public String getAppointmentStatus() {
         return appointmentStatus;

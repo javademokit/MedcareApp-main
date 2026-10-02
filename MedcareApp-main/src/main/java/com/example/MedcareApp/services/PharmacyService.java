@@ -3,6 +3,7 @@ package com.example.MedcareApp.services;
 import com.example.MedcareApp.Entity.pharmacy.MedicationItem;
 import com.example.MedcareApp.Entity.pharmacy.PrescriptionIssue;
 import com.example.MedcareApp.Entity.pharmacy.PurchaseOrder;
+import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.Interafce.MedicationRepository;
 import com.example.MedcareApp.Interafce.PrescriptionIssueRepository;
 import com.example.MedcareApp.Interafce.PurchaseOrderRepository;
@@ -19,6 +20,7 @@ public class PharmacyService {
     private final MedicationRepository medicationRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PrescriptionIssueRepository prescriptionIssueRepository;
+    private final PatientRepository patientRepository;
 
     public List<MedicationItem> getInventory() {
         return medicationRepository.findAll();
@@ -63,8 +65,16 @@ public class PharmacyService {
     }
 
     public PrescriptionIssue createPrescriptionIssue(PrescriptionIssue issue) {
+        var patients = patientRepository.findAllByPatientId(issue.getPatientId());
+        if (patients.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Patient ID not found");
+        }
+        if (patients.size() != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Patient ID is not unique");
+        }
         MedicationItem medication = medicationRepository.findById(issue.getMedicationId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Medication not found"));
+        issue.setPatientName(patients.get(0).getPatientName());
         issue.setMedicationName(medication.getName());
         issue.setStatus("PENDING");
         issue.setCreatedAt(Instant.now());

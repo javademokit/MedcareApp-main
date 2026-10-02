@@ -3,6 +3,7 @@ package com.example.MedcareApp.Controller;
 
 import com.example.MedcareApp.Entity.Appointment;
 import com.example.MedcareApp.Interafce.AppointmentRepository;
+import com.example.MedcareApp.services.AppointmentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,14 +17,18 @@ import java.util.Optional;
 @RequestMapping("/api/appointments1")
 public class AppointmentController {
 
+    private final AppointmentRepository repository;
+    private final AppointmentService appointmentService;
+
     @Autowired
-    private AppointmentRepository repository;
+    public AppointmentController(AppointmentRepository repository, AppointmentService appointmentService) {
+        this.repository = repository;
+        this.appointmentService = appointmentService;
+    }
 
     @PostMapping
-    public Appointment bookAppointment(@RequestBody Appointment appointment) {
-
-
-        return repository.save(appointment);
+    public ResponseEntity<Appointment> bookAppointment(@RequestBody Appointment appointment) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(appointmentService.bookAppointment(appointment));
     }
     @GetMapping
     public List<Appointment> getAllAppointments() {
@@ -35,24 +40,11 @@ public class AppointmentController {
             @PathVariable String id,
             @RequestBody Map<String, String> updates
     ) {
-        Optional<Appointment> optionalAppointment = repository.findById(id);
-
-        if (optionalAppointment.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "Appointment not found"));
-        }
-
-        Appointment appointment = optionalAppointment.get();
-        String newStatus = updates.get("status");  // We expect the field name to be 'status'
-
-        if (newStatus != null) {
-            appointment.setAppointmentStatus(newStatus); // Ensure this matches your field name in Appointment entity
-            repository.save(appointment);
-            return ResponseEntity.ok(Map.of("message", "Status updated", "status", newStatus));
-        }
-
-        return ResponseEntity.badRequest()
-                .body(Map.of("message", "Missing 'status' in request body"));
+        String newStatus = updates.get("status");
+        Appointment appointment = appointmentService.updateStatus(id, newStatus);
+        return ResponseEntity.ok(Map.of(
+                "message", "Status updated",
+                "status", appointment.getAppointmentStatus()));
     }
 
 }

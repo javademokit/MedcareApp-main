@@ -31,4 +31,6 @@ public class StaffShift {
     private String status = "SCHEDULED";
     private String notes;
     private Instant createdAt;
+    private Instant checkInAt;
+    private Instant checkOutAt;
 }

@@ -4,6 +4,7 @@ import com.example.MedcareApp.Entity.staff.StaffShift;
 import com.example.MedcareApp.Interafce.StaffShiftRepository;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ public class StaffShiftService {
     public StaffShift createShift(StaffShift shift) {
         validateShift(shift, null);
         shift.setStatus("SCHEDULED");
+        shift.setCreatedAt(Instant.now());
         return repository.save(shift);
     }
 
@@ -30,9 +32,56 @@ public class StaffShiftService {
         StaffShift existing = repository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
         update.setId(id);
-        if (update.getStatus() == null || update.getStatus().isBlank()) update.setStatus(existing.getStatus());
+        if ("CANCELLED".equalsIgnoreCase(update.getStatus())) {
+            if (!"SCHEDULED".equals(existing.getStatus())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Only scheduled shifts can be cancelled");
+            }
+            update.setStatus("CANCELLED");
+        } else {
+            update.setStatus(existing.getStatus());
+        }
+        update.setCreatedAt(existing.getCreatedAt());
+        update.setCheckInAt(existing.getCheckInAt());
+        update.setCheckOutAt(existing.getCheckOutAt());
         validateShift(update, id);
         return repository.save(update);
+    }
+
+    public StaffShift checkInDoctor(String id) {
+        StaffShift shift = getDoctorShiftForToday(id);
+        if (!"SCHEDULED".equals(shift.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only a scheduled doctor shift can be checked in");
+        }
+        shift.setStatus("ON_DUTY");
+        shift.setCheckInAt(Instant.now());
+        return repository.save(shift);
+    }
+
+    public StaffShift checkOutDoctor(String id) {
+        StaffShift shift = getDoctorShiftForToday(id);
+        if (!"ON_DUTY".equals(shift.getStatus()) || shift.getCheckInAt() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Doctor must be checked in before checking out");
+        }
+        shift.setStatus("COMPLETED");
+        shift.setCheckOutAt(Instant.now());
+        return repository.save(shift);
+    }
+
+    private StaffShift getDoctorShiftForToday(String id) {
+        StaffShift shift = repository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        if (!"DOCTOR".equalsIgnoreCase(shift.getStaffRole())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Attendance action is only available for doctor shifts");
+        }
+        if (!LocalDate.now().toString().equals(shift.getShiftDate())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Doctor attendance can only be recorded on the scheduled shift date");
+        }
+        return shift;
     }
 
     public void deleteShift(String id) {

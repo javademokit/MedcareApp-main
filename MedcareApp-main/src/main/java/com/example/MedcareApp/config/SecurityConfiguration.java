@@ -14,6 +14,7 @@ import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -31,6 +32,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfiguration {
     @Value("${app.cors.allowed-origin:http://localhost:3000}")
     private String allowedOrigin;
@@ -57,9 +59,13 @@ public class SecurityConfiguration {
                     throw new BadCredentialsException("Invalid email or password");
                 }
 
+                if (!account.isActive()) throw new BadCredentialsException("Account is unavailable");
+                var authorities = account.getRoles().stream()
+                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
+                        .toList();
                 var principal = User.withUsername(account.getEmailId())
                         .password(account.getPassword())
-                        .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                        .authorities(authorities)
                         .build();
                 return UsernamePasswordAuthenticationToken.authenticated(
                         principal, null, principal.getAuthorities());
@@ -104,6 +110,44 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.POST, "/api/users/signup", "/api/users/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/users/csrf").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/users/me").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/users/logout").authenticated()
+                        .requestMatchers("/api/doctor-portal/**").hasRole("DOCTOR")
+                        .requestMatchers("/api/patient-portal/**").hasRole("PATIENT")
+                        .requestMatchers("/api/dashboard/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR",
+                                "NURSE", "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE",
+                                "PHARMACIST", "LAB_TECHNICIAN")
+                        .requestMatchers("/api/users/**").hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/doctors").authenticated()
+                        .requestMatchers("/api/doctors/**").hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/patients/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "NURSE",
+                                "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE")
+                        .requestMatchers("/api/patients/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "NURSE",
+                                "RECEPTIONIST", "BILLING_EXECUTIVE")
+                        .requestMatchers(HttpMethod.POST, "/api/appointments1").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "RECEPTIONIST",
+                                "CRM_EXECUTIVE")
+                        .requestMatchers("/api/appointments1/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "RECEPTIONIST")
+                        .requestMatchers("/api/medical-tests/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "LAB_TECHNICIAN")
+                        .requestMatchers("/api/urinetests/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "LAB_TECHNICIAN")
+                        .requestMatchers("/api/emergency/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST")
+                        .requestMatchers("/api/pharmacy/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "PHARMACIST")
+                        .requestMatchers("/api/discharges/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "BILLING_EXECUTIVE")
+                        .requestMatchers("/api/staff/shifts/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
+                        .requestMatchers("/api/daily-updates/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE")
+                        .requestMatchers("/api/reports/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "BILLING_EXECUTIVE")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(
                     new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))

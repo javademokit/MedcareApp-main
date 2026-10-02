@@ -1,6 +1,8 @@
 package com.example.MedcareApp.Controller;
 
 import com.example.MedcareApp.Interafce.MedicalTestRepository;
+import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.testModel.MedicalTest;
 import com.example.MedcareApp.web.DiagnosticResultRequest;
 import com.example.MedcareApp.web.DiagnosticReviewRequest;
@@ -35,18 +37,27 @@ import org.springframework.web.server.ResponseStatusException;
 public class MedicalTestController {
     private static final long MAX_REPORT_BYTES = 10L * 1024 * 1024;
     private final MedicalTestRepository repository;
+    private final PatientRepository patientRepository;
     private final GridFsTemplate gridFsTemplate;
 
-    public MedicalTestController(MedicalTestRepository repository, GridFsTemplate gridFsTemplate) {
+    public MedicalTestController(
+            MedicalTestRepository repository,
+            PatientRepository patientRepository,
+            GridFsTemplate gridFsTemplate) {
         this.repository = repository;
+        this.patientRepository = patientRepository;
         this.gridFsTemplate = gridFsTemplate;
     }
 
     @PostMapping
     public ResponseEntity<MedicalTest> saveTest(@RequestBody MedicalTest test) {
-        if (test.getTestType() == null || test.getPatientName() == null || test.getPatientName().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patient and test type are required");
+        if (test.getTestType() == null || test.getPatientId() == null || test.getPatientId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patient ID and test type are required");
         }
+        Patient patient = getPatient(test.getPatientId());
+        test.setPatientName(patient.getPatientName());
+        test.setAge(parseAge(patient.getPatientAge()));
+        test.setGender(patient.getGender());
         test.setStatus("ORDERED");
         test.setOrderDate(Instant.now().toString());
         return ResponseEntity.status(HttpStatus.CREATED).body(repository.save(test));
@@ -147,6 +158,22 @@ public class MedicalTestController {
     private MedicalTest getOrder(String id) {
         return repository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Test order not found"));
+    }
+
+    private Patient getPatient(String patientId) {
+        List<Patient> patients = patientRepository.findAllByPatientId(patientId);
+        if (patients.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Patient ID not found");
+        if (patients.size() != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "Patient ID is not unique");
+        return patients.get(0);
+    }
+
+    private int parseAge(String age) {
+        if (age == null || age.isBlank()) return 0;
+        try {
+            return Integer.parseInt(age);
+        } catch (NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Patient age is not a valid whole number");
+        }
     }
 
     private String sanitizeFilename(String filename) {
