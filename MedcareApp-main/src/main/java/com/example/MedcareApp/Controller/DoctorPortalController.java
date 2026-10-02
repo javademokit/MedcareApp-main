@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -62,28 +63,28 @@ public class DoctorPortalController {
         Doctor doctor = getLinkedDoctor(principal);
         String today = LocalDate.now().toString();
         List<Appointment> appointments = new java.util.ArrayList<>(
-                appointmentRepository.findAllByDoctorIdAndDateGreaterThanEqualOrderByDateAscTimeAsc(
-                        doctor.getId(), today));
-        appointmentRepository.findAllByDoctorAndDateGreaterThanEqualOrderByDateAscTimeAsc(
-                        doctor.getDoctorName(), today).stream()
+                appointmentRepository.findAllByDoctorIdOrderByDateDescTimeDesc(doctor.getId()));
+        appointmentRepository.findAllByDoctorOrderByDateDescTimeDesc(doctor.getDoctorName()).stream()
                 .filter(appointment -> !StringUtils.hasText(appointment.getDoctorId()))
                 .filter(appointment -> isAssignedToDoctor(appointment, doctor))
                 .forEach(appointments::add);
         appointments.sort(java.util.Comparator
-                .comparing(Appointment::getDate, java.util.Comparator.nullsLast(String::compareTo))
+                .comparing(Appointment::getDate, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder()))
                 .thenComparing(Appointment::getTime, java.util.Comparator.nullsLast(String::compareTo)));
-        long waiting = appointments.stream()
+        long upcomingWaiting = appointments.stream()
+                .filter(appointment -> appointment.getDate() != null && appointment.getDate().compareTo(today) >= 0)
                 .filter(appointment -> "pending".equalsIgnoreCase(appointment.getAppointmentStatus())
                         || "confirmed".equalsIgnoreCase(appointment.getAppointmentStatus()))
                 .count();
         long followUps = appointments.stream()
+                .filter(appointment -> appointment.getDate() != null && appointment.getDate().compareTo(today) >= 0)
                 .filter(appointment -> appointment.getReason() != null
                         && appointment.getReason().toLowerCase().contains("follow"))
                 .count();
         return Map.of(
                 "doctor", doctor,
                 "appointments", appointments,
-                "waitingCount", waiting,
+                "waitingCount", upcomingWaiting,
                 "followUpCount", followUps,
                 "fromDate", today);
     }
@@ -171,6 +172,14 @@ public class DoctorPortalController {
         }
         List<Doctor> sameNameDoctors = doctorRepository.findAllByDoctorName(doctor.getDoctorName());
         return sameNameDoctors.size() == 1 && doctor.getId().equals(sameNameDoctors.get(0).getId());
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> handleDoctorPortalError(ResponseStatusException exception) {
+        String message = exception.getReason() == null
+                ? "Doctor request could not be completed"
+                : exception.getReason();
+        return ResponseEntity.status(exception.getStatusCode()).body(Map.of("message", message));
     }
 
     private Doctor getLinkedDoctor(Principal principal) {
