@@ -20,6 +20,7 @@ public class MedicationItem {
     private String name;
     private String strength;
     private String dosageForm;
+    private String department;
     @NotBlank
     private String batchNumber;
     @Min(0)

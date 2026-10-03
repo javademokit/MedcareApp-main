@@ -2,6 +2,8 @@ package com.example.MedcareApp.Controller;
 
 import com.example.MedcareApp.Entity.Patient;
 import com.example.MedcareApp.Entity.nursing.NurseHandover;
+import com.example.MedcareApp.Entity.nursing.BedStaySegment;
+import com.example.MedcareApp.Entity.nursing.BedWaitingListEntry;
 import com.example.MedcareApp.Entity.nursing.NurseProfile;
 import com.example.MedcareApp.Entity.nursing.NurseShiftRoster;
 import com.example.MedcareApp.Entity.nursing.NurseShiftSwap;
@@ -9,6 +11,7 @@ import com.example.MedcareApp.Entity.nursing.NursingCareRecord;
 import com.example.MedcareApp.Entity.nursing.PatientAssignment;
 import com.example.MedcareApp.Entity.nursing.Ward;
 import com.example.MedcareApp.Entity.nursing.WardBed;
+import com.example.MedcareApp.Entity.nursing.WardRoom;
 import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.Interafce.UserRepository;
@@ -27,6 +30,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -121,7 +125,89 @@ public class NursingController {
         if (request == null || !StringUtils.hasText(request.status())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bed status is required");
         }
-        return nursingService.updateBedStatus(wardId, bedId, request.status(), principal.getName());
+        return nursingService.updateBedStatus(wardId, bedId, request.status(),
+                request.reason(), request.holdUntil(), principal.getName());
+    }
+
+    @GetMapping("/rooms")
+    public List<WardRoom> getRooms(
+            @RequestParam(required = false) String wardId,
+            Principal principal) {
+        return nursingService.getRooms(wardId, getAccount(principal).getId());
+    }
+
+    @PostMapping("/rooms")
+    public ResponseEntity<WardRoom> createRoom(@RequestBody WardRoom room, Principal principal) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(nursingService.saveRoom(room, principal.getName()));
+    }
+
+    @PostMapping("/rooms/bulk")
+    public ResponseEntity<List<WardRoom>> createRoomsBulk(
+            @RequestBody List<WardRoom> rooms, Principal principal) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(nursingService.bulkCreateRooms(rooms, principal.getName()));
+    }
+
+    @PutMapping("/rooms/{roomId}")
+    public WardRoom updateRoom(
+            @PathVariable String roomId, @RequestBody WardRoom room, Principal principal) {
+        return nursingService.updateRoom(roomId, room, principal.getName());
+    }
+
+    @GetMapping("/beds/available")
+    public List<Map<String, Object>> getAvailableBeds(
+            @RequestParam(required = false) String wardId,
+            @RequestParam(required = false) String floor,
+            @RequestParam(required = false) String ac,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String gender,
+            @RequestParam(required = false) List<String> amenities,
+            Principal principal) {
+        return nursingService.getAvailableBeds(
+                getAccount(principal).getId(), wardId, floor, ac, category, gender, amenities);
+    }
+
+    @GetMapping("/beds/summary")
+    public Map<String, Object> getBedSummary(Principal principal) {
+        return nursingService.getBedSummary(getAccount(principal).getId());
+    }
+
+    @GetMapping("/bed-stays")
+    public List<BedStaySegment> getBedStaySegments(Principal principal) {
+        return nursingService.getBedStaySegments(getAccount(principal).getId());
+    }
+
+    @GetMapping("/bed-waiting-list")
+    public List<Map<String, Object>> getBedWaitingList(Principal principal) {
+        return nursingService.getBedWaitingList(getAccount(principal).getId());
+    }
+
+    @PostMapping("/bed-waiting-list")
+    public ResponseEntity<BedWaitingListEntry> addToBedWaitingList(
+            @RequestBody BedWaitingListRequest request, Principal principal) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Waiting-list details are required");
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(nursingService.addToBedWaitingList(
+                request.patientId(), request.wardId(), request.preferredAcType(),
+                request.preferredCategory(), request.priority(), principal.getName()));
+    }
+
+    @PostMapping("/bed-waiting-list/{entryId}/cancel")
+    public BedWaitingListEntry cancelBedWaitingList(@PathVariable String entryId, Principal principal) {
+        return nursingService.cancelBedWaitingList(entryId, principal.getName());
+    }
+
+    @GetMapping("/beds/{bedId}/history")
+    public List<com.example.MedcareApp.Entity.nursing.BedStatusHistory> getBedHistory(
+            @PathVariable String bedId, Principal principal) {
+        return nursingService.getBedHistory(bedId, getAccount(principal).getId());
+    }
+
+    @PostMapping("/beds/{bedId}/cleaning-complete")
+    public WardBed completeBedCleaning(@PathVariable String bedId, Principal principal) {
+        return nursingService.completeBedCleaning(bedId, principal.getName());
     }
 
     @GetMapping("/rosters")
@@ -318,7 +404,9 @@ public class NursingController {
     public record AssignmentRequest(String nurseId, String role, String shift) {}
     public record AdmissionTransferRequest(String wardId, String bedId) {}
     public record WardAssignmentRequest(String nurseId, String role, String shift, String bedFrom, String bedTo) {}
-    public record BedStatusRequest(String status) {}
+    public record BedStatusRequest(String status, String reason, String holdUntil) {}
+    public record BedWaitingListRequest(
+            String patientId, String wardId, String preferredAcType, String preferredCategory, String priority) {}
     public record ShiftSwapRequest(String toNurseId, String wardId, String shift, String date, String note) {}
     public record ShiftSwapDecisionRequest(Boolean approve, String note) {}
     public record NurseAssignmentRequest(String nurseId) {}

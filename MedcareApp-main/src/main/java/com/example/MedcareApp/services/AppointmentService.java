@@ -8,10 +8,14 @@ import com.example.MedcareApp.Interafce.AppointmentRepository;
 import com.example.MedcareApp.Interafce.AppointmentSlotReservationRepository;
 import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
+import com.example.MedcareApp.Entity.billing.AppointmentInvoice;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +35,7 @@ public class AppointmentService {
     private final AppointmentSlotReservationRepository slotReservationRepository;
     private final DoctorRepository doctorRepository;
     private final PatientRepository patientRepository;
+    private final AppointmentBillingService billingService;
 
     public Appointment bookAppointment(Appointment appointment) {
         validateBooking(appointment);
@@ -50,7 +55,6 @@ public class AppointmentService {
 
         appointment.setDoctorId(doctor.getId());
         appointment.setDoctor(doctor.getDoctorName());
-        appointment.setFee(String.valueOf(doctor.getDoctorfee()));
         String reservationId = slotReservationId(doctor.getId(), appointment.getDate(), appointment.getTime());
         try {
             slotReservationRepository.insert(new AppointmentSlotReservation(
@@ -64,6 +68,8 @@ public class AppointmentService {
             Patient patient = StringUtils.hasText(appointment.getPatientId())
                     ? findPatient(appointment.getPatientId())
                     : findOrCreatePatient(appointment);
+            appointment.setFee(hasRecentAppointment(patient) ? "0.00"
+                    : BigDecimal.valueOf(doctor.getDoctorfee()).setScale(2, RoundingMode.HALF_UP).toPlainString());
             appointment.setPatientId(patient.getPatientId());
             appointment.setPatientName(patient.getPatientName());
             appointment.setGender(patient.getGender());
@@ -74,7 +80,22 @@ public class AppointmentService {
             appointment.setAppointmentStatus("pending");
             patient.setPatientAppointmentdate(appointment.getDate());
             patientRepository.save(patient);
-            return appointmentRepository.save(appointment);
+            Appointment saved = appointmentRepository.save(appointment);
+            try {
+                AppointmentInvoice invoice = billingService.createInvoice(saved);
+                saved.setInvoiceId(invoice.getId());
+                saved.setInvoiceNumber(invoice.getInvoiceNumber());
+                saved.setBillingStatus(invoice.getStatus());
+                saved.setBalanceDue(invoice.getBalanceDue().toPlainString());
+            } catch (RuntimeException exception) {
+                try {
+                    appointmentRepository.deleteById(saved.getId());
+                } catch (RuntimeException cleanupException) {
+                    exception.addSuppressed(cleanupException);
+                }
+                throw exception;
+            }
+            return saved;
         } catch (RuntimeException exception) {
             try {
                 slotReservationRepository.deleteById(reservationId);
@@ -83,6 +104,28 @@ public class AppointmentService {
             }
             throw exception;
         }
+    }
+
+    private boolean hasRecentAppointment(Patient patient) {
+        LocalDate today = LocalDate.now();
+        java.util.stream.Stream<Appointment> byPatientId =
+                appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc(patient.getPatientId()).stream();
+        java.util.stream.Stream<Appointment> byMobile = StringUtils.hasText(patient.getPatientmobileNo())
+                ? appointmentRepository.findAllByMobileNo(patient.getPatientmobileNo()).stream()
+                : java.util.stream.Stream.empty();
+        return java.util.stream.Stream.concat(byPatientId, byMobile)
+                .filter(appointment -> !"cancelled".equalsIgnoreCase(appointment.getAppointmentStatus()))
+                .map(Appointment::getDate)
+                .filter(StringUtils::hasText)
+                .map(date -> {
+                    try {
+                        return LocalDate.parse(date);
+                    } catch (DateTimeParseException exception) {
+                        return null;
+                    }
+                })
+                .filter(date -> date != null && !date.isAfter(today))
+                .anyMatch(date -> ChronoUnit.DAYS.between(date, today) <= 15);
     }
 
     public Appointment bookForPatient(String patientId, Appointment appointment) {
@@ -160,6 +203,7 @@ public class AppointmentService {
                                     : appointment.getDoctor(),
                             appointment.getDate(),
                             appointment.getTime()));
+            billingService.cancelInvoice(updated.getId());
         }
         return updated;
     }

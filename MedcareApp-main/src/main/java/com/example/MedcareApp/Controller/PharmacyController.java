@@ -1,6 +1,7 @@
 package com.example.MedcareApp.Controller;
 
 import com.example.MedcareApp.Entity.pharmacy.MedicationItem;
+import com.example.MedcareApp.Entity.pharmacy.MedicationPrescription;
 import com.example.MedcareApp.Entity.pharmacy.PrescriptionIssue;
 import com.example.MedcareApp.Entity.pharmacy.PurchaseOrder;
 import com.example.MedcareApp.services.PharmacyService;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 @RestController
 @RequestMapping("/api/pharmacy")
@@ -27,6 +29,19 @@ public class PharmacyController {
     @GetMapping("/medications")
     public List<MedicationItem> getInventory() {
         return pharmacyService.getInventory();
+    }
+
+    @GetMapping("/prescriptions")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','PHARMACIST')")
+    public List<MedicationPrescription> getMedicationPrescriptions() {
+        return pharmacyService.getMedicationPrescriptions();
+    }
+
+    @PostMapping("/prescriptions/{id}/dispense")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','PHARMACIST')")
+    public MedicationPrescription dispenseMedicationPrescription(
+            @PathVariable String id, Principal principal) {
+        return pharmacyService.dispenseMedicationPrescription(id, principal.getName());
     }
 
     @PostMapping("/medications")

@@ -4,6 +4,7 @@ import com.example.MedcareApp.Entity.Appointment;
 import com.example.MedcareApp.Entity.Consultation;
 import com.example.MedcareApp.Entity.Doctor;
 import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Entity.pharmacy.MedicationPrescription;
 import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.Interafce.AppointmentRepository;
 import com.example.MedcareApp.Interafce.ConsultationRepository;
@@ -11,7 +12,9 @@ import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.MedicalTestRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.services.UserService;
+import com.example.MedcareApp.services.PharmacyService;
 import com.example.MedcareApp.web.DoctorConsultationRequest;
+import com.example.MedcareApp.web.PrescribableMedication;
 import com.example.MedcareApp.testModel.MedicalTest;
 import com.example.MedcareApp.testModel.MedicalTestType;
 import jakarta.validation.Valid;
@@ -42,6 +45,7 @@ public class DoctorPortalController {
     private final PatientRepository patientRepository;
     private final ConsultationRepository consultationRepository;
     private final MedicalTestRepository medicalTestRepository;
+    private final PharmacyService pharmacyService;
 
     public DoctorPortalController(
             UserService userService,
@@ -49,13 +53,20 @@ public class DoctorPortalController {
             DoctorRepository doctorRepository,
             PatientRepository patientRepository,
             ConsultationRepository consultationRepository,
-            MedicalTestRepository medicalTestRepository) {
+            MedicalTestRepository medicalTestRepository,
+            PharmacyService pharmacyService) {
         this.userService = userService;
         this.appointmentRepository = appointmentRepository;
         this.doctorRepository = doctorRepository;
         this.patientRepository = patientRepository;
         this.consultationRepository = consultationRepository;
         this.medicalTestRepository = medicalTestRepository;
+        this.pharmacyService = pharmacyService;
+    }
+
+    @GetMapping("/medications")
+    public List<PrescribableMedication> getPrescribableMedications() {
+        return pharmacyService.getPrescribableMedications();
     }
 
     @GetMapping("/dashboard")
@@ -105,7 +116,7 @@ public class DoctorPortalController {
     }
 
     @PostMapping("/consultations")
-    public ResponseEntity<Consultation> completeConsultation(
+    public ResponseEntity<Map<String, Object>> completeConsultation(
             Principal principal,
             @Valid @RequestBody DoctorConsultationRequest request) {
         Doctor doctor = getLinkedDoctor(principal);
@@ -150,6 +161,9 @@ public class DoctorPortalController {
         consultation.setDoctorNotes(trimToNull(request.getDoctorNotes()));
         consultation.setFollowUpDate(trimToNull(request.getFollowUpDate()));
         Consultation saved = consultationRepository.save(consultation);
+        MedicationPrescription medicationPrescription = pharmacyService.createMedicationPrescription(
+                saved.getId(), appointment.getId(), patient, doctor.getId(), doctor.getDoctorName(),
+                saved.getDiagnosis(), request.getMedicationOrders());
         for (MedicalTestType testType : labOrderTypes) {
             MedicalTest order = new MedicalTest();
             order.setPatientId(appointment.getPatientId());
@@ -163,7 +177,9 @@ public class DoctorPortalController {
         }
         appointment.setAppointmentStatus("completed");
         appointmentRepository.save(appointment);
-        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
+                "consultation", saved,
+                "medicationPrescription", medicationPrescription == null ? Map.of() : medicationPrescription));
     }
 
     private boolean isAssignedToDoctor(Appointment appointment, Doctor doctor) {

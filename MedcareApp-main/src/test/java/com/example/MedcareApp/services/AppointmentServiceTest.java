@@ -11,10 +11,12 @@ import com.example.MedcareApp.Entity.Appointment;
 import com.example.MedcareApp.Entity.AppointmentSlotReservation;
 import com.example.MedcareApp.Entity.Doctor;
 import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Entity.billing.AppointmentInvoice;
 import com.example.MedcareApp.Interafce.AppointmentRepository;
 import com.example.MedcareApp.Interafce.AppointmentSlotReservationRepository;
 import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
+import com.example.MedcareApp.services.AppointmentBillingService;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -32,6 +34,7 @@ class AppointmentServiceTest {
     @Mock private AppointmentSlotReservationRepository slotReservationRepository;
     @Mock private DoctorRepository doctorRepository;
     @Mock private PatientRepository patientRepository;
+    @Mock private AppointmentBillingService billingService;
     @InjectMocks private AppointmentService service;
 
     @Test
@@ -40,6 +43,7 @@ class AppointmentServiceTest {
         when(patientRepository.findAll()).thenReturn(List.of());
         when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
         Appointment request = appointment();
 
         Appointment booked = service.bookAppointment(request);
@@ -64,6 +68,7 @@ class AppointmentServiceTest {
         when(patientRepository.findAllByPatientId("PT-EXISTING")).thenReturn(List.of(patient));
         when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
         Appointment request = appointment();
         request.setPatientId("PT-UNTRUSTED");
         request.setPatientName("Untrusted edited name");
@@ -95,6 +100,7 @@ class AppointmentServiceTest {
         when(patientRepository.findAll()).thenReturn(List.of(patient));
         when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
         Appointment request = appointment();
         request.setDoctorId("doctor-profile-2");
         request.setDoctor("Dr. Other");
@@ -167,6 +173,62 @@ class AppointmentServiceTest {
         service.updateStatus("appointment-1", "cancelled");
 
         verify(slotReservationRepository).deleteById(any(String.class));
+        verify(billingService).cancelInvoice("appointment-1");
+    }
+
+    @Test
+    void bookingCreatesInvoiceAtServerFeeAndReturnsInvoiceSummary() {
+        prepareDoctorAndSlot();
+        when(patientRepository.findAll()).thenReturn(List.of());
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
+
+        Appointment booked = service.bookAppointment(appointment());
+
+        assertEquals("500.00", booked.getFee());
+        assertEquals("invoice-1", booked.getInvoiceId());
+        assertEquals("PENDING", booked.getBillingStatus());
+        assertEquals("500.00", booked.getBalanceDue());
+        verify(billingService).createInvoice(booked);
+    }
+
+    @Test
+    void bookingWithinFifteenDaysGetsNoChargeInvoice() {
+        prepareDoctorAndSlot();
+        Patient patient = new Patient();
+        patient.setPatientId("PT-EXISTING");
+        patient.setPatientName("Existing Patient");
+        patient.setPatientAge("37");
+        patient.setGender("Female");
+        patient.setPatientmobileNo("5551234");
+        when(patientRepository.findAllByPatientId("PT-EXISTING")).thenReturn(List.of(patient));
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Appointment previous = new Appointment();
+        previous.setDate(LocalDate.now().minusDays(15).toString());
+        previous.setAppointmentStatus("completed");
+        when(appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc("PT-EXISTING"))
+                .thenReturn(List.of(previous));
+        when(appointmentRepository.findAllByMobileNo("5551234")).thenReturn(List.of());
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AppointmentInvoice noChargeInvoice = new AppointmentInvoice();
+        noChargeInvoice.setId("invoice-follow-up");
+        noChargeInvoice.setStatus("NO_CHARGE");
+        noChargeInvoice.setAmount(java.math.BigDecimal.ZERO.setScale(2));
+        noChargeInvoice.setPaidAmount(java.math.BigDecimal.ZERO.setScale(2));
+        when(billingService.createInvoice(any(Appointment.class))).thenAnswer(invocation -> {
+            Appointment booked = invocation.getArgument(0);
+            assertEquals("0.00", booked.getFee());
+            return noChargeInvoice;
+        });
+
+        Appointment request = appointment();
+        request.setPatientId("PT-EXISTING");
+
+        Appointment booked = service.bookAppointment(request);
+
+        assertEquals("NO_CHARGE", booked.getBillingStatus());
+        assertEquals("0.00", booked.getBalanceDue());
     }
 
     private Appointment appointment() {
@@ -190,5 +252,14 @@ class AppointmentServiceTest {
         doctor.setDoctorAvailabletime(List.of("10:00 AM"));
         when(doctorRepository.findById("doctor-profile-1")).thenReturn(Optional.of(doctor));
         when(appointmentRepository.findAllByDoctorAndDateAndTime(any(), any(), any())).thenReturn(List.of());
+    }
+
+    private void prepareInvoice() {
+        AppointmentInvoice invoice = new AppointmentInvoice();
+        invoice.setId("invoice-1");
+        invoice.setStatus("PENDING");
+        invoice.setAmount(new java.math.BigDecimal("500.00"));
+        invoice.setPaidAmount(java.math.BigDecimal.ZERO.setScale(2));
+        when(billingService.createInvoice(any(Appointment.class))).thenReturn(invoice);
     }
 }

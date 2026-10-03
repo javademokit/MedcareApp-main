@@ -1,7 +1,7 @@
 package com.example.MedcareApp.web;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 import lombok.Data;
 
@@ -21,7 +21,9 @@ public class DoctorConsultationRequest {
     private String diagnosis;
 
     private String prescription;
-    private List<@jakarta.validation.constraints.NotBlank String> labOrders = List.of();
+    private List<@NotBlank String> labOrders = List.of();
+    @Valid
+    private List<MedicationPrescriptionRequest.MedicationOrder> medicationOrders = List.of();
     private String doctorNotes;
     private String followUpDate;
 }

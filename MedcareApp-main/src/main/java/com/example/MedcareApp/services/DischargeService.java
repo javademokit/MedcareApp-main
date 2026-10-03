@@ -149,6 +149,10 @@ public class DischargeService {
     }
 
     public DischargeCase completeDischarge(String id) {
+        return completeDischarge(id, "discharge-service");
+    }
+
+    public DischargeCase completeDischarge(String id, String actor) {
         DischargeCase dischargeCase = getCase(id);
         if (!dischargeCase.isClearanceReady()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Clinical approval, insurance decision, and payment clearance are required");
@@ -159,7 +163,7 @@ public class DischargeService {
         }
         String date = LocalDate.now().toString();
         Patient patient = patients.get(0);
-        nursingService.dischargePatient(patient);
+        nursingService.dischargePatient(patient, actor);
         patient.setPatientDischargedate(date);
         patientRepository.save(patient);
         dischargeCase.setStatus("DISCHARGED");

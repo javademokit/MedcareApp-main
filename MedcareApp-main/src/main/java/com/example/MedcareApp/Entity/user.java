@@ -22,6 +22,7 @@ public class user {
     private String emailId;
     private String mobileNo;
     private String doctorId;
+    private String employeeCode;
     private Set<String> roles = Set.of("PATIENT");
     private Boolean active = true;
 
@@ -82,6 +83,14 @@ public class user {
 
     public void setDoctorId(String doctorId) {
         this.doctorId = doctorId;
+    }
+
+    public String getEmployeeCode() {
+        return employeeCode;
+    }
+
+    public void setEmployeeCode(String employeeCode) {
+        this.employeeCode = employeeCode;
     }
 
     public Set<String> getRoles() {

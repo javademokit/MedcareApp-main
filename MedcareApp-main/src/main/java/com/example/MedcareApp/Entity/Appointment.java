@@ -2,6 +2,7 @@ package com.example.MedcareApp.Entity;
 
 import lombok.Data;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.util.UUID;
@@ -27,6 +28,14 @@ public class Appointment {
     private String reason;
     private String fee;
     private String appointmentStatus = "pending";
+    @Transient
+    private String invoiceId;
+    @Transient
+    private String invoiceNumber;
+    @Transient
+    private String billingStatus;
+    @Transient
+    private String balanceDue;
 
     public String getAppointmentStatus() {
         return appointmentStatus;

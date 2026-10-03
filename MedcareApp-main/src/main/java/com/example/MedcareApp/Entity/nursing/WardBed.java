@@ -11,7 +11,12 @@ public class WardBed {
     @Id
     private String id = UUID.randomUUID().toString();
     private String wardId;
+    private String roomId;
     private String bedNumber;
+    private String bedType = "STANDARD";
     private String status = "VACANT";
     private String patientId;
+    private String holdUntil;
+    private String blockReason;
+    private java.util.Map<String, Object> equipment = new java.util.HashMap<>();
 }

@@ -14,6 +14,7 @@ import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.MedicalTestRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.services.UserService;
+import com.example.MedcareApp.services.PharmacyService;
 import java.security.Principal;
 import java.util.List;
 import java.util.Optional;
@@ -28,6 +29,7 @@ class DoctorPortalControllerTest {
         PatientRepository patientRepository = org.mockito.Mockito.mock(PatientRepository.class);
         ConsultationRepository consultationRepository = org.mockito.Mockito.mock(ConsultationRepository.class);
         MedicalTestRepository medicalTestRepository = org.mockito.Mockito.mock(MedicalTestRepository.class);
+        PharmacyService pharmacyService = org.mockito.Mockito.mock(PharmacyService.class);
 
         user account = new user();
         account.setActive(true);
@@ -53,7 +55,8 @@ class DoctorPortalControllerTest {
                 doctorRepository,
                 patientRepository,
                 consultationRepository,
-                medicalTestRepository);
+                medicalTestRepository,
+                pharmacyService);
         Principal principal = () -> "doctor@example.test";
 
         var dashboard = controller.getDashboard(principal);

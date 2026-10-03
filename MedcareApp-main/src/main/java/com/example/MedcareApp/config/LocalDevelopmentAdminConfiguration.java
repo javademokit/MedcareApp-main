@@ -20,7 +20,7 @@ public class LocalDevelopmentAdminConfiguration {
     private static final Logger LOGGER = LoggerFactory.getLogger(LocalDevelopmentAdminConfiguration.class);
     private static final Set<String> ALL_ROLES = Set.of(
             "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "HEAD_NURSE",
-            "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "PHARMACIST",
+            "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "FINANCE", "HR", "PHARMACIST",
             "LAB_TECHNICIAN", "PATIENT");
 
     @Bean

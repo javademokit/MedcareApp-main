@@ -8,4 +8,5 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 public interface WardBedRepository extends MongoRepository<WardBed, String> {
     List<WardBed> findByWardId(String wardId);
     Optional<WardBed> findByWardIdAndBedNumber(String wardId, String bedNumber);
+    List<WardBed> findByRoomId(String roomId);
 }

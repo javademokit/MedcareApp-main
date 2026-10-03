@@ -27,6 +27,7 @@ import org.springframework.web.server.ResponseStatusException;
 class DischargeServiceTest {
     @Mock private DischargeCaseRepository dischargeRepository;
     @Mock private PatientRepository patientRepository;
+    @Mock private NursingService nursingService;
     @InjectMocks private DischargeService service;
 
     @Test

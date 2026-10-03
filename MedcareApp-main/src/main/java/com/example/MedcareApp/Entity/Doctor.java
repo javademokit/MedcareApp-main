@@ -11,6 +11,7 @@ public class Doctor {
 
     @Id
     private String id;
+    private String employeeId;
     private String doctorName;
     private String doctorSpecialistName;
     private String doctorMobileNo;

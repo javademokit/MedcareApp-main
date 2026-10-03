@@ -61,7 +61,7 @@ public class DischargeController {
     }
 
     @PostMapping("/{id}/complete")
-    public DischargeCase completeDischarge(@PathVariable String id) {
-        return dischargeService.completeDischarge(id);
+    public DischargeCase completeDischarge(@PathVariable String id, Principal principal) {
+        return dischargeService.completeDischarge(id, principal.getName());
     }
 }

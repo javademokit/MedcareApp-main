@@ -21,7 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class UserService {
     private static final Set<String> ALLOWED_ROLES = Set.of(
             "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "HEAD_NURSE",
-            "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "PHARMACIST",
+            "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "FINANCE", "HR", "PHARMACIST",
             "LAB_TECHNICIAN", "PATIENT");
 
     private final UserRepository userRepository;
@@ -124,8 +124,12 @@ public class UserService {
             doctor.setDoctorAvailabletime(availableTimes);
             doctor.setDoctorslot(availableTimes.size());
             doctor.setDoctorfee(doctorProfile.getDoctorfee());
+            doctor.setEmployeeId(StaffIdentifierGenerator.generate("DT"));
             Doctor savedDoctor = doctorRepository.save(doctor);
             newUser.setDoctorId(savedDoctor.getId());
+        }
+        if (normalizedRoles.contains("PHARMACIST")) {
+            newUser.setEmployeeCode(StaffIdentifierGenerator.generate("PT"));
         }
         return userRepository.save(newUser);
     }
@@ -186,7 +190,14 @@ public class UserService {
     }
 
     public List<user> getAllUsers() {
-        return userRepository.findAll();
+        return userRepository.findAll().stream().map(account -> {
+            if (account.getRoles().contains("PHARMACIST")
+                    && (account.getEmployeeCode() == null || !account.getEmployeeCode().startsWith("PT-"))) {
+                account.setEmployeeCode(StaffIdentifierGenerator.generate("PT"));
+                return userRepository.save(account);
+            }
+            return account;
+        }).toList();
     }
 
     public List<user> findByUserId(String userId) {
