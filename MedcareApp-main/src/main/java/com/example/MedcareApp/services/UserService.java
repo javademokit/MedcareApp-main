@@ -20,7 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class UserService {
     private static final Set<String> ALLOWED_ROLES = Set.of(
-            "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE",
+            "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "HEAD_NURSE",
             "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "PHARMACIST",
             "LAB_TECHNICIAN", "PATIENT");
 

@@ -63,7 +63,7 @@ public class AppointmentService {
         try {
             Patient patient = StringUtils.hasText(appointment.getPatientId())
                     ? findPatient(appointment.getPatientId())
-                    : createPatient(appointment);
+                    : findOrCreatePatient(appointment);
             appointment.setPatientId(patient.getPatientId());
             appointment.setPatientName(patient.getPatientName());
             appointment.setGender(patient.getGender());
@@ -178,15 +178,18 @@ public class AppointmentService {
         }
     }
 
-    private Patient createPatient(Appointment appointment) {
+    private Patient findOrCreatePatient(Appointment appointment) {
         String mobileNo = appointment.getMobileNo().trim();
-        boolean duplicate = patientRepository.findAllByPatientmobileNo(mobileNo).stream()
-                .anyMatch(patient -> patient.getPatientName() != null
-                        && patient.getPatientName().trim().equalsIgnoreCase(appointment.getPatientName().trim()));
-        if (duplicate) {
+        String normalizedMobile = normalizeMobile(mobileNo);
+        List<Patient> matches = patientRepository.findAll().stream()
+                .filter(patient -> normalizeMobile(patient.getPatientmobileNo()).equals(normalizedMobile))
+                .toList();
+        if (matches.size() > 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A patient with this name and mobile number already exists. Select their existing Patient ID.");
+                    "More than one patient record uses this mobile number. Select the correct existing Patient ID.");
         }
+        if (matches.size() == 1) return matches.get(0);
+
         Patient patient = new Patient();
         patient.setPatientId("PT-" + UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT));
         patient.setPatientName(appointment.getPatientName().trim());
@@ -197,6 +200,10 @@ public class AppointmentService {
         patient.setPatientAddress(appointment.getPatientAddress() == null ? null : appointment.getPatientAddress().trim());
         patient.setPatientAppointmentdate(appointment.getDate());
         return patient;
+    }
+
+    private String normalizeMobile(String mobileNo) {
+        return mobileNo == null ? "" : mobileNo.replaceAll("\\D", "");
     }
 
     private Patient findPatient(String patientId) {

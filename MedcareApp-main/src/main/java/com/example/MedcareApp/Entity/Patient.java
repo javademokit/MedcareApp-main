@@ -23,6 +23,10 @@ public class Patient {
     private String patientAppointmentdate;
     private String patientAdmitdate;
     private String patientWardnum;
+    private String patientWardId;
+    private String patientBedId;
     private String patientDischargedate;
     private String patientNurseassign;
+    private String patientNurseId;
+    private String patientAllergies;
 }

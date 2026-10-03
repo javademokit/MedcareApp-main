@@ -3,8 +3,9 @@ package com.example.MedcareApp.Controller;
 import com.example.MedcareApp.Entity.Patient;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.web.PatientAdmissionRequest;
+import com.example.MedcareApp.services.NursingService;
 import jakarta.validation.Valid;
-import java.time.LocalDate;
+import java.security.Principal;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,9 +18,11 @@ import java.util.List;
 public class PatientController {
 
     private final PatientRepository patientRepository;
+    private final NursingService nursingService;
 
-    public PatientController(PatientRepository patientRepository) {
+    public PatientController(PatientRepository patientRepository, NursingService nursingService) {
         this.patientRepository = patientRepository;
+        this.nursingService = nursingService;
     }
 
     @GetMapping
@@ -35,16 +38,18 @@ public class PatientController {
     @PostMapping("/{patientId}/admission")
     public ResponseEntity<Patient> admitPatient(
             @PathVariable String patientId,
-            @Valid @RequestBody PatientAdmissionRequest request) {
-        Patient patient = findPatient(patientId);
-        if (patient.getPatientAdmitdate() != null && !patient.getPatientAdmitdate().isBlank()
-                && (patient.getPatientDischargedate() == null || patient.getPatientDischargedate().isBlank())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Patient is already admitted");
+            @Valid @RequestBody PatientAdmissionRequest request,
+            Principal principal) {
+        String wardId = request.getWardId();
+        if (wardId == null || wardId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select a configured ward");
         }
-        patient.setPatientAdmitdate(LocalDate.now().toString());
-        patient.setPatientDischargedate(null);
-        patient.setPatientWardnum(request.getWardNumber().trim());
-        return ResponseEntity.status(HttpStatus.CREATED).body(patientRepository.save(patient));
+        if (request.getBedId() == null || request.getBedId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select a vacant bed");
+        }
+        Patient patient = nursingService.admitPatient(
+                patientId, wardId, request.getBedId(), principal.getName());
+        return ResponseEntity.status(HttpStatus.CREATED).body(patient);
     }
 
     private Patient findPatient(String patientId) {

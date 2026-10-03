@@ -37,7 +37,7 @@ class AppointmentServiceTest {
     @Test
     void bookingNewPatientCreatesOneRecordAndReturnsItsCanonicalId() {
         prepareDoctorAndSlot();
-        when(patientRepository.findAllByPatientmobileNo("5551234")).thenReturn(List.of());
+        when(patientRepository.findAll()).thenReturn(List.of());
         when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
         Appointment request = appointment();
@@ -77,13 +77,34 @@ class AppointmentServiceTest {
     }
 
     @Test
-    void bookingCannotCreateDuplicatePatientByNameAndPhone() {
-        prepareDoctorAndSlot();
+    void bookingAgainByMobileKeepsPatientIdWhenDoctorChanges() {
         Patient patient = new Patient();
+        patient.setPatientId("PT-EXISTING");
         patient.setPatientName("A Patient");
-        when(patientRepository.findAllByPatientmobileNo("5551234")).thenReturn(List.of(patient));
+        patient.setPatientAge("37");
+        patient.setGender("Female");
+        patient.setPatientmobileNo("(555) 1234");
+        Doctor anotherDoctor = new Doctor();
+        anotherDoctor.setId("doctor-profile-2");
+        anotherDoctor.setDoctorName("Dr. Other");
+        anotherDoctor.setDoctorAvailabletime(List.of("10:00 AM"));
+        anotherDoctor.setDoctorfee(700);
+        when(doctorRepository.findById("doctor-profile-2")).thenReturn(Optional.of(anotherDoctor));
+        when(appointmentRepository.findAllByDoctorAndDateAndTime(
+                "Dr. Other", appointment().getDate(), "10:00 AM")).thenReturn(List.of());
+        when(patientRepository.findAll()).thenReturn(List.of(patient));
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Appointment request = appointment();
+        request.setDoctorId("doctor-profile-2");
+        request.setDoctor("Dr. Other");
 
-        assertThrows(ResponseStatusException.class, () -> service.bookAppointment(appointment()));
+        Appointment booked = service.bookAppointment(request);
+
+        assertEquals("PT-EXISTING", booked.getPatientId());
+        assertEquals("Dr. Other", booked.getDoctor());
+        assertEquals("doctor-profile-2", booked.getDoctorId());
+        verify(patientRepository).save(patient);
     }
 
     @Test

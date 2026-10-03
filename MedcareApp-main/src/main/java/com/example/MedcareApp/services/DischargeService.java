@@ -26,6 +26,7 @@ public class DischargeService {
     private static final List<String> CLAIM_DECISIONS = List.of("APPROVED", "PARTIALLY_APPROVED", "DENIED");
     private final DischargeCaseRepository dischargeRepository;
     private final PatientRepository patientRepository;
+    private final NursingService nursingService;
 
     public List<DischargeCase> getCases() {
         return dischargeRepository.findAllByOrderByCreatedAtDesc();
@@ -158,6 +159,7 @@ public class DischargeService {
         }
         String date = LocalDate.now().toString();
         Patient patient = patients.get(0);
+        nursingService.dischargePatient(patient);
         patient.setPatientDischargedate(date);
         patientRepository.save(patient);
         dischargeCase.setStatus("DISCHARGED");

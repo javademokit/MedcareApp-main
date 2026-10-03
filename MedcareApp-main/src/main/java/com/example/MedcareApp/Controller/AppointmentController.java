@@ -8,10 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/appointments1")
@@ -35,6 +35,13 @@ public class AppointmentController {
         return repository.findAll();
     }
 
+    @GetMapping("/availability")
+    public List<String> getAvailability(
+            @RequestParam String doctorId,
+            @RequestParam String date) {
+        return appointmentService.getAvailableTimes(doctorId, date);
+    }
+
     @PatchMapping("/{id}")
     public ResponseEntity<?> updateAppointmentStatus(
             @PathVariable String id,
@@ -45,6 +52,15 @@ public class AppointmentController {
         return ResponseEntity.ok(Map.of(
                 "message", "Status updated",
                 "status", appointment.getAppointmentStatus()));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> handleAppointmentError(ResponseStatusException exception) {
+        String message = exception.getReason() == null || exception.getReason().isBlank()
+                ? "The appointment request could not be completed."
+                : exception.getReason();
+        return ResponseEntity.status(exception.getStatusCode())
+                .body(Map.of("message", message));
     }
 
 }

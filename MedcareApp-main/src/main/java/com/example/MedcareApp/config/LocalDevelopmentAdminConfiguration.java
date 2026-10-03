@@ -19,7 +19,7 @@ import org.springframework.util.StringUtils;
 public class LocalDevelopmentAdminConfiguration {
     private static final Logger LOGGER = LoggerFactory.getLogger(LocalDevelopmentAdminConfiguration.class);
     private static final Set<String> ALL_ROLES = Set.of(
-            "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE",
+            "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "HEAD_NURSE",
             "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "PHARMACIST",
             "LAB_TECHNICIAN", "PATIENT");
 
