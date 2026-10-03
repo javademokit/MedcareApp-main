@@ -134,6 +134,49 @@ public class UserService {
         return userRepository.save(newUser);
     }
 
+    public user createPatientAccount(
+            String userId,
+            String emailId,
+            String mobileNo,
+            String password,
+            String patientName,
+            String patientAge,
+            String gender,
+            String patientAddress) {
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(emailId)
+                || !StringUtils.hasText(password) || password.length() < 12
+                || !StringUtils.hasText(patientName)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "User ID, patient name, valid email, and a password of at least 12 characters are required");
+        }
+        String normalizedEmail = emailId.trim().toLowerCase(Locale.ROOT);
+        String normalizedUserId = userId.trim();
+        if (!userRepository.findAllByEmailIdIgnoreCase(normalizedEmail).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this email already exists");
+        }
+        if (!userRepository.findByUserId(normalizedUserId).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this user ID already exists");
+        }
+
+        user account = new user();
+        account.setUserId(normalizedUserId);
+        account.setEmailId(normalizedEmail);
+        account.setMobileNo(StringUtils.trimWhitespace(mobileNo));
+        account.setPassword(passwordEncoder.encode(password));
+        account.setRoles(Set.of("PATIENT"));
+        account.setActive(true);
+        user savedAccount = userRepository.save(account);
+
+        Patient patient = ensurePatientProfileForUser(savedAccount);
+        patient.setPatientName(patientName.trim());
+        patient.setPatientmobileNo(StringUtils.trimWhitespace(mobileNo));
+        patient.setPatientAge(StringUtils.trimWhitespace(patientAge));
+        patient.setGender(StringUtils.trimWhitespace(gender));
+        patient.setPatientAddress(StringUtils.trimWhitespace(patientAddress));
+        patientRepository.save(patient);
+        return savedAccount;
+    }
+
     public user assignDoctorProfile(String userId, String doctorId) {
         List<user> matches = userRepository.findByUserId(userId);
         if (matches.size() != 1) {

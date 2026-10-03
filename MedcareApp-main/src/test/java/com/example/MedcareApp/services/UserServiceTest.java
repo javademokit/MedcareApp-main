@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.Entity.Doctor;
+import com.example.MedcareApp.Entity.Patient;
 import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.Interafce.UserRepository;
@@ -77,6 +78,26 @@ class UserServiceTest {
 
         assertThrows(ResponseStatusException.class,
                 () -> userService.createStaffUser(request, Set.of("PATIENT")));
+    }
+
+    @Test
+    void createsPatientLoginWithEncodedPasswordAndPatientProfile() {
+        when(userRepository.findAllByEmailIdIgnoreCase("patient@example.test")).thenReturn(List.of());
+        when(userRepository.findByUserId("patient-one")).thenReturn(List.of());
+        when(passwordEncoder.encode("StrongPatientPass2026")).thenReturn("encoded-password");
+        when(userRepository.save(any(user.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(patientRepository.findAllByPatientEmailIdIgnoreCase("patient@example.test")).thenReturn(List.of());
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        user created = userService.createPatientAccount(
+                " patient-one ", "Patient@Example.Test", "5557654321", "StrongPatientPass2026",
+                "Pat Example", "42", "Female", "12 Example Street");
+
+        assertEquals("patient-one", created.getUserId());
+        assertEquals("patient@example.test", created.getEmailId());
+        assertEquals("encoded-password", created.getPassword());
+        assertEquals(Set.of("PATIENT"), created.getRoles());
+        verify(patientRepository, org.mockito.Mockito.times(2)).save(any(Patient.class));
     }
 
     @Test

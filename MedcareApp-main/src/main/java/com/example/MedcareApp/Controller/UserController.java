@@ -4,6 +4,7 @@ package com.example.MedcareApp.Controller;
 import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.services.UserService;
 import com.example.MedcareApp.web.StaffAccountRequest;
+import com.example.MedcareApp.web.PatientAccountRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -167,6 +168,19 @@ public class UserController {
         }
     }
 
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'HOSPITAL_ADMIN', 'CLINIC_ADMIN')")
+    @PostMapping("/patients")
+    public ResponseEntity<Map<String, Object>> createPatientAccount(
+            @Valid @RequestBody PatientAccountRequest request) {
+        user account = userService.createPatientAccount(
+                request.getUserId(), request.getEmailId(), request.getMobileNo(), request.getPassword(),
+                request.getPatientName(), request.getPatientAge(), request.getGender(), request.getPatientAddress());
+        return ResponseEntity.status(201).body(Map.of(
+                "userId", account.getUserId(),
+                "emailId", account.getEmailId(),
+                "roles", account.getRoles(),
+                "active", account.isActive()));
+    }
 
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'HOSPITAL_ADMIN', 'CLINIC_ADMIN')")
     @GetMapping("/{userId}")
