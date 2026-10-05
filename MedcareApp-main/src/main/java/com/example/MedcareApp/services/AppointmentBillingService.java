@@ -53,6 +53,14 @@ public class AppointmentBillingService {
         return invoiceRepository.findAllByOrderByCreatedAtDesc();
     }
 
+    public AppointmentInvoice getInvoiceForAppointment(String appointmentId) {
+        return invoiceRepository.findByAppointmentId(appointmentId).orElse(null);
+    }
+
+    public List<AppointmentInvoice> getInvoicesForAppointments(List<String> appointmentIds) {
+        return appointmentIds.isEmpty() ? List.of() : invoiceRepository.findAllByAppointmentIdIn(appointmentIds);
+    }
+
     public AppointmentInvoice recordPayment(String invoiceId, AppointmentPaymentRequest request, String receivedBy) {
         AppointmentInvoice invoice = invoiceRepository.findById(invoiceId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Appointment invoice not found"));

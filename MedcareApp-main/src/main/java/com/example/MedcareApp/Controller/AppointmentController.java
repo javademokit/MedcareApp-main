@@ -2,7 +2,6 @@ package com.example.MedcareApp.Controller;
 
 
 import com.example.MedcareApp.Entity.Appointment;
-import com.example.MedcareApp.Interafce.AppointmentRepository;
 import com.example.MedcareApp.services.AppointmentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -17,12 +16,10 @@ import java.util.Map;
 @RequestMapping("/api/appointments1")
 public class AppointmentController {
 
-    private final AppointmentRepository repository;
     private final AppointmentService appointmentService;
 
     @Autowired
-    public AppointmentController(AppointmentRepository repository, AppointmentService appointmentService) {
-        this.repository = repository;
+    public AppointmentController(AppointmentService appointmentService) {
         this.appointmentService = appointmentService;
     }
 
@@ -32,7 +29,7 @@ public class AppointmentController {
     }
     @GetMapping
     public List<Appointment> getAllAppointments() {
-        return repository.findAll();
+        return appointmentService.getAllAppointments();
     }
 
     @GetMapping("/availability")

@@ -9,6 +9,7 @@ import org.springframework.data.mongodb.repository.Query;
 public interface AppointmentInvoiceRepository extends MongoRepository<AppointmentInvoice, String> {
     List<AppointmentInvoice> findAllByOrderByCreatedAtDesc();
     Optional<AppointmentInvoice> findByAppointmentId(String appointmentId);
+    List<AppointmentInvoice> findAllByAppointmentIdIn(List<String> appointmentIds);
     @Query("{'payments.gatewayOrderId': ?0}")
     Optional<AppointmentInvoice> findByPaymentsGatewayOrderId(String gatewayOrderId);
 }

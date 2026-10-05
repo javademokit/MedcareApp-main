@@ -19,8 +19,11 @@ import java.math.RoundingMode;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -83,10 +86,7 @@ public class AppointmentService {
             Appointment saved = appointmentRepository.save(appointment);
             try {
                 AppointmentInvoice invoice = billingService.createInvoice(saved);
-                saved.setInvoiceId(invoice.getId());
-                saved.setInvoiceNumber(invoice.getInvoiceNumber());
-                saved.setBillingStatus(invoice.getStatus());
-                saved.setBalanceDue(invoice.getBalanceDue().toPlainString());
+                attachInvoiceSummary(saved, invoice);
             } catch (RuntimeException exception) {
                 try {
                     appointmentRepository.deleteById(saved.getId());
@@ -137,7 +137,11 @@ public class AppointmentService {
     }
 
     public List<Appointment> getAppointmentsForPatient(String patientId) {
-        return appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc(patientId);
+        return attachInvoiceSummaries(appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc(patientId));
+    }
+
+    public List<Appointment> getAllAppointments() {
+        return attachInvoiceSummaries(appointmentRepository.findAll());
     }
 
     public List<String> getAvailableTimes(String doctorId, String date) {
@@ -193,6 +197,14 @@ public class AppointmentService {
         }
         Appointment appointment = appointmentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Appointment not found"));
+        if ("confirmed".equals(normalizedStatus)) {
+            AppointmentInvoice invoice = billingService.getInvoiceForAppointment(id);
+            if (invoice != null && (!Set.of("PAID", "NO_CHARGE").contains(invoice.getStatus())
+                    || invoice.getBalanceDue().signum() > 0)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Collect and record the appointment payment before confirming");
+            }
+        }
         appointment.setAppointmentStatus(normalizedStatus);
         Appointment updated = appointmentRepository.save(appointment);
         if ("cancelled".equals(normalizedStatus)) {
@@ -206,6 +218,27 @@ public class AppointmentService {
             billingService.cancelInvoice(updated.getId());
         }
         return updated;
+    }
+
+    private List<Appointment> attachInvoiceSummaries(List<Appointment> appointments) {
+        if (appointments.isEmpty()) return appointments;
+        Map<String, AppointmentInvoice> invoices = billingService.getInvoicesForAppointments(
+                        appointments.stream().map(Appointment::getId).toList())
+                .stream()
+                .collect(Collectors.toMap(AppointmentInvoice::getAppointmentId, Function.identity()));
+        return appointments.stream()
+                .map(appointment -> attachInvoiceSummary(appointment, invoices.get(appointment.getId())))
+                .toList();
+    }
+
+    private Appointment attachInvoiceSummary(Appointment appointment, AppointmentInvoice invoice) {
+        if (invoice != null) {
+            appointment.setInvoiceId(invoice.getId());
+            appointment.setInvoiceNumber(invoice.getInvoiceNumber());
+            appointment.setBillingStatus(invoice.getStatus());
+            appointment.setBalanceDue(invoice.getBalanceDue().toPlainString());
+        }
+        return appointment;
     }
 
     static String slotReservationId(String doctor, String date, String time) {

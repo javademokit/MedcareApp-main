@@ -177,6 +177,43 @@ class AppointmentServiceTest {
     }
 
     @Test
+    void unpaidInvoicePreventsAppointmentConfirmation() {
+        Appointment appointment = appointment();
+        appointment.setId("appointment-1");
+        AppointmentInvoice invoice = new AppointmentInvoice();
+        invoice.setAmount(new java.math.BigDecimal("500.00"));
+        invoice.setPaidAmount(java.math.BigDecimal.ZERO);
+        invoice.setStatus("PENDING");
+        when(appointmentRepository.findById("appointment-1")).thenReturn(Optional.of(appointment));
+        when(billingService.getInvoiceForAppointment("appointment-1")).thenReturn(invoice);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class, () -> service.updateStatus("appointment-1", "confirmed"));
+
+        assertEquals(409, exception.getStatusCode().value());
+        verify(appointmentRepository, org.mockito.Mockito.never()).save(any(Appointment.class));
+    }
+
+    @Test
+    void paidAndNoChargeInvoicesAllowAppointmentConfirmation() {
+        for (String billingStatus : List.of("PAID", "NO_CHARGE")) {
+            Appointment appointment = appointment();
+            appointment.setId("appointment-" + billingStatus);
+            AppointmentInvoice invoice = new AppointmentInvoice();
+            invoice.setStatus(billingStatus);
+            invoice.setAmount("PAID".equals(billingStatus)
+                    ? new java.math.BigDecimal("500.00") : java.math.BigDecimal.ZERO);
+            invoice.setPaidAmount("PAID".equals(billingStatus)
+                    ? new java.math.BigDecimal("500.00") : java.math.BigDecimal.ZERO);
+            when(appointmentRepository.findById(appointment.getId())).thenReturn(Optional.of(appointment));
+            when(billingService.getInvoiceForAppointment(appointment.getId())).thenReturn(invoice);
+            when(appointmentRepository.save(appointment)).thenReturn(appointment);
+
+            assertEquals("confirmed", service.updateStatus(appointment.getId(), "confirmed").getAppointmentStatus());
+        }
+    }
+
+    @Test
     void bookingCreatesInvoiceAtServerFeeAndReturnsInvoiceSummary() {
         prepareDoctorAndSlot();
         when(patientRepository.findAll()).thenReturn(List.of());
