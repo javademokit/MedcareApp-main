@@ -6,32 +6,23 @@ import java.math.RoundingMode;
 public final class PayrollCalculator {
     private PayrollCalculator() {}
 
-    public static BigDecimal componentAmount(
-            String calculation,
-            BigDecimal fixedAmount,
-            BigDecimal percent,
-            BigDecimal basic,
-            BigDecimal units) {
-        BigDecimal amount = switch (calculation) {
-            case "FIXED" -> fixedAmount;
-            case "PERCENT_OF_BASIC" -> basic.multiply(percent)
-                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-            case "PER_UNIT" -> fixedAmount.multiply(units);
-            default -> throw new IllegalArgumentException("Unsupported payroll calculation: " + calculation);
-        };
-        return round(amount);
-    }
-
-    public static BigDecimal prorate(BigDecimal amount, long activeDays, long periodDays) {
-        if (activeDays < 0 || periodDays <= 0 || activeDays > periodDays) {
-            throw new IllegalArgumentException("Payroll proration days are outside the cycle range");
+    public static BigDecimal prorate(BigDecimal monthlyAmount, BigDecimal paidDays, int periodDays) {
+        if (monthlyAmount == null || monthlyAmount.signum() < 0
+                || paidDays == null || paidDays.signum() < 0 || periodDays < 0) {
+            throw new IllegalArgumentException("Payroll amounts and days must be non-negative");
         }
-        return round(amount.multiply(BigDecimal.valueOf(activeDays))
-                .divide(BigDecimal.valueOf(periodDays), 2, RoundingMode.HALF_UP));
+        if (periodDays == 0) {
+            if (paidDays.signum() != 0) throw new IllegalArgumentException("Paid days require period days");
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        if (paidDays.compareTo(BigDecimal.valueOf(periodDays)) > 0) {
+            throw new IllegalArgumentException("Paid days cannot exceed period days");
+        }
+        return round(monthlyAmount.multiply(paidDays)
+                .divide(BigDecimal.valueOf(periodDays), 8, RoundingMode.HALF_UP));
     }
 
-    public static BigDecimal round(BigDecimal amount) {
-        return amount == null ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-                : amount.setScale(2, RoundingMode.HALF_UP);
+    private static BigDecimal round(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP);
     }
 }

@@ -109,20 +109,41 @@ public class SecurityConfiguration {
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authenticationProvider(authenticationProvider)
                 .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users/signup", "/api/users/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/users/csrf").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/users/me").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/users/logout").authenticated()
                         .requestMatchers("/api/doctor-portal/**").hasRole("DOCTOR")
                         .requestMatchers("/api/patient-portal/**").hasRole("PATIENT")
-                        .requestMatchers("/api/payroll/me/**").hasAnyRole("DOCTOR", "NURSE", "HEAD_NURSE")
-                        .requestMatchers(HttpMethod.GET, "/api/payroll/doctor-earnings/mine",
-                                "/api/payroll/nurse-attendance/mine").hasAnyRole("DOCTOR", "NURSE", "HEAD_NURSE")
-                        .requestMatchers("/api/payroll/nurse-overtime/**", "/api/payroll/nurse-attendance/**")
-                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "FINANCE", "HR",
-                                        "HEAD_NURSE", "NURSE")
-                        .requestMatchers("/api/payroll/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "FINANCE", "HR")
+                        .requestMatchers("/api/hr/**", "/api/reports/hr/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
+                        .requestMatchers("/api/employees/**", "/api/employee-types/**", "/api/departments/**",
+                                "/api/designations/**", "/api/shifts/**", "/api/attendance/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR")
+                        .requestMatchers(HttpMethod.GET, "/api/leaves/mine").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE",
+                                "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
+                                "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
+                        .requestMatchers(HttpMethod.POST, "/api/leaves").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE",
+                                "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
+                                "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
+                        .requestMatchers("/api/leaves/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR")
+                        .requestMatchers("/api/salary/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
+                        .requestMatchers("/api/payroll/me/**", "/api/payslips/*/download")
+                                .hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE",
+                                "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
+                                "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
+                        .requestMatchers(HttpMethod.GET, "/api/payslips/*/*").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE",
+                                "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
+                                "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
+                        .requestMatchers("/api/payroll/**", "/api/payslips/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
                         .requestMatchers(HttpMethod.POST,
                                 "/api/billing/appointment-invoices/gateway/payu/callback").permitAll()
                         .requestMatchers("/api/billing/appointment-invoices/**").hasAnyRole(
