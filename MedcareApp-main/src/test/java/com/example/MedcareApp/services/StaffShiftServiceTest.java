@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verify;
 
 import com.example.MedcareApp.Entity.staff.StaffShift;
 import com.example.MedcareApp.Interafce.StaffShiftRepository;
@@ -85,6 +84,18 @@ class StaffShiftServiceTest {
                 ResponseStatusException.class, () -> service.checkInDoctor("shift-1"));
 
         assertEquals(400, exception.getStatusCode().value());
+        verify(repository, never()).save(any(StaffShift.class));
+    }
+
+    @Test
+    void doctorCannotRecordAttendanceForAnotherDoctorsShift() {
+        StaffShift shift = todaysDoctorShift();
+        when(repository.findById("shift-1")).thenReturn(Optional.of(shift));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> service.checkInDoctorForStaff("shift-1", List.of("another-doctor")));
+
+        assertEquals(403, exception.getStatusCode().value());
         verify(repository, never()).save(any(StaffShift.class));
     }
 

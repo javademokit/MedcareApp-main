@@ -8,4 +8,5 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface MedicationPrescriptionRepository extends MongoRepository<MedicationPrescription, String> {
     List<MedicationPrescription> findAllByOrderByCreatedAtDesc();
+    List<MedicationPrescription> findAllByPatientIdOrderByCreatedAtDesc(String patientId);
 }

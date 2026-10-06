@@ -21,6 +21,9 @@ public class Payslip {
     private String employeeEmail;
     private String employeeName;
     private String employeeType;
+    private String panNumber;
+    private String aadhaarLastFour;
+    private String pfUanNumber;
     private String departmentName;
     private String designationName;
     private String month;

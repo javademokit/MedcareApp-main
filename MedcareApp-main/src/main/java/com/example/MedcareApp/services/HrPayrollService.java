@@ -7,6 +7,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Designation;
 import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.hrpayroll.EmployeeType;
 import com.example.MedcareApp.Entity.hrpayroll.LeaveRequest;
+import com.example.MedcareApp.Entity.hrpayroll.OvertimeAllowanceRequest;
 import com.example.MedcareApp.Entity.hrpayroll.PayrollRun;
 import com.example.MedcareApp.Entity.hrpayroll.Payslip;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryComponent;
@@ -154,22 +155,119 @@ public class HrPayrollService {
         return require(Employee.class, id, "Employee");
     }
 
+    public List<Map<String, Object>> doctorEmployees() {
+        return mongo.findAll(Employee.class).stream()
+                .filter(employee -> "DOCTOR".equals(upper(employee.getEmployeeType())))
+                .filter(employee -> !"TERMINATED".equals(upper(employee.getStatus())))
+                .map(employee -> {
+                    Doctor profile = findDoctorProfile(employee);
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("id", employee.getId());
+                    result.put("employeeCode", employee.getEmployeeCode());
+                    result.put("doctorName", employee.getFullName());
+                    result.put("doctorSpecialistName", doctorSpecialization(employee));
+                    result.put("doctorMobileNo", employee.getMobile());
+                    result.put("doctorDestination", employeeDepartmentName(employee));
+                    result.put("doctorfee", employee.getDoctorConsultationFee() != null
+                            ? employee.getDoctorConsultationFee()
+                            : profile == null ? 0 : profile.getDoctorfee());
+                    result.put("doctorAvailabletime", employee.getDoctorAvailableTimes() != null
+                            && !employee.getDoctorAvailableTimes().isEmpty()
+                            ? employee.getDoctorAvailableTimes()
+                            : profile == null ? List.of() : profile.getDoctorAvailabletime());
+                    result.put("doctorProfileId", employee.getDoctorProfileId());
+                    result.put("status", employee.getStatus());
+                    return result;
+                })
+                .toList();
+    }
+
+    public Doctor updateDoctorSchedule(String employeeId, List<String> availableTimes, Double consultationFee) {
+        Employee employee = require(Employee.class, employeeId, "Employee");
+        if (!"DOCTOR".equals(upper(employee.getEmployeeType()))) {
+            throw badRequest("Scheduling can only be updated for a doctor employee");
+        }
+        if ("TERMINATED".equals(upper(employee.getStatus()))) {
+            throw conflict("A terminated doctor cannot be scheduled");
+        }
+        if (availableTimes == null || availableTimes.isEmpty()) {
+            throw badRequest("Add at least one available time slot");
+        }
+        List<String> normalizedTimes = availableTimes.stream()
+                .filter(HrPayrollService::hasText)
+                .map(String::trim)
+                .distinct()
+                .sorted()
+                .toList();
+        if (normalizedTimes.isEmpty()) {
+            throw badRequest("Add at least one available time slot");
+        }
+        for (String time : normalizedTimes) {
+            try {
+                java.time.LocalTime.parse(time);
+            } catch (java.time.format.DateTimeParseException exception) {
+                throw badRequest("Use HH:mm for each available time slot");
+            }
+        }
+        employee.setDoctorAvailableTimes(normalizedTimes);
+        if (consultationFee != null) {
+            employee.setDoctorConsultationFee(nonNegative(BigDecimal.valueOf(consultationFee)).doubleValue());
+        }
+        employee.setUpdatedAt(Instant.now());
+        syncDoctorProfile(employee);
+        mongo.save(employee);
+        return mongo.findById(employee.getDoctorProfileId(), Doctor.class);
+    }
+
+    private String doctorSpecialization(Employee employee) {
+        Object specialization = employee.getProfessionalInfo() == null
+                ? null : employee.getProfessionalInfo().get("specialization");
+        if (specialization instanceof String value && hasText(value)) return value.trim();
+        return "General medicine";
+    }
+
+    public Map<String, String> attachEmployeeDocument(
+            String employeeId, String documentType, String fileId, String fileName, String contentType) {
+        Employee employee = require(Employee.class, employeeId, "Employee");
+        if (employee.getOnboardingDocuments() == null) {
+            employee.setOnboardingDocuments(new LinkedHashMap<>());
+        }
+        Map<String, String> document = Map.of(
+                "fileId", fileId,
+                "fileName", fileName,
+                "contentType", contentType);
+        employee.getOnboardingDocuments().put(documentType, document);
+        employee.setUpdatedAt(Instant.now());
+        mongo.save(employee);
+        return document;
+    }
+
     public Employee saveEmployee(Employee employee) {
         validateEmployee(employee, null);
         employee.setEmployeeCode(normalize(employee.getEmployeeCode()));
-        if (employee.getEmployeeCode() == null) employee.setEmployeeCode(StaffIdentifierGenerator.generate("EMP"));
+        normalizeStatutoryIdentifiers(employee);
+        if (employee.getEmployeeCode() == null) {
+            employee.setEmployeeCode(StaffIdentifierGenerator.generate(
+                    "DOCTOR".equals(upper(employee.getEmployeeType())) ? "DT" : "EMP"));
+        }
         employee.setEmployeeType(upper(employee.getEmployeeType()));
         employee.setDepartmentName(employeeDepartmentName(employee));
         employee.setStatus(defaultValue(upper(employee.getStatus()), "ONBOARDING"));
         employee.setEmploymentType(defaultValue(upper(employee.getEmploymentType()), "FULL_TIME"));
         employee.setEmail(normalizeEmail(employee.getEmail()));
         employee.setUpdatedAt(Instant.now());
+        syncDoctorProfile(employee);
         return mongo.save(employee);
     }
 
     public Employee updateEmployee(String id, Employee update) {
         Employee current = employee(id);
+        if (!hasText(update.getAadhaarLastFour())) update.setAadhaarLastFour(current.getAadhaarLastFour());
+        if (update.getOnboardingDocuments() == null || update.getOnboardingDocuments().isEmpty()) {
+            update.setOnboardingDocuments(current.getOnboardingDocuments());
+        }
         validateEmployee(update, id);
+        normalizeStatutoryIdentifiers(update);
         update.setId(id);
         update.setEmployeeCode(current.getEmployeeCode());
         update.setCreatedAt(current.getCreatedAt());
@@ -179,7 +277,57 @@ public class HrPayrollService {
         update.setStatus(defaultValue(upper(update.getStatus()), current.getStatus()));
         update.setEmploymentType(defaultValue(upper(update.getEmploymentType()), current.getEmploymentType()));
         update.setEmail(normalizeEmail(update.getEmail()));
+        syncDoctorProfile(update);
         return mongo.save(update);
+    }
+
+    private void syncDoctorProfile(Employee employee) {
+        if (!"DOCTOR".equals(upper(employee.getEmployeeType()))) return;
+
+        Doctor doctor = findDoctorProfile(employee);
+        boolean creatingProfile = doctor == null;
+        if (doctor == null) {
+            doctor = new Doctor();
+            doctor.setDoctorAvailabletime(new ArrayList<>());
+            doctor.setDoctorfee(0);
+        }
+
+        doctor.setEmployeeId(employee.getEmployeeCode().startsWith("DT-")
+                ? employee.getEmployeeCode() : StaffIdentifierGenerator.generate("DT"));
+        doctor.setDoctorName(employee.getFullName());
+        doctor.setDoctorMobileNo(employee.getMobile());
+        Object specialization = employee.getProfessionalInfo() == null
+                ? null : employee.getProfessionalInfo().get("specialization");
+        if (specialization instanceof String value && hasText(value)) {
+            doctor.setDoctorSpecialistName(value.trim());
+        } else if (creatingProfile) {
+            doctor.setDoctorSpecialistName("General medicine");
+        }
+        doctor.setDoctorDestination(employeeDepartmentName(employee));
+        if (employee.getDoctorConsultationFee() != null) {
+            doctor.setDoctorfee(nonNegative(BigDecimal.valueOf(employee.getDoctorConsultationFee())).doubleValue());
+        }
+        if (employee.getDoctorAvailableTimes() != null) {
+            List<String> times = employee.getDoctorAvailableTimes().stream()
+                    .filter(HrPayrollService::hasText)
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
+            doctor.setDoctorAvailabletime(times);
+        }
+        doctor.setDoctorslot(doctor.getDoctorAvailabletime() == null ? 0 : doctor.getDoctorAvailabletime().size());
+        Doctor savedDoctor = mongo.save(doctor);
+        employee.setDoctorProfileId(savedDoctor.getId());
+    }
+
+    private Doctor findDoctorProfile(Employee employee) {
+        Doctor doctor = hasText(employee.getDoctorProfileId())
+                ? mongo.findById(employee.getDoctorProfileId(), Doctor.class) : null;
+        if (doctor == null && hasText(employee.getEmployeeCode())) {
+            doctor = mongo.findOne(Query.query(Criteria.where("employeeId").is(employee.getEmployeeCode())),
+                    Doctor.class);
+        }
+        return doctor;
     }
 
     public void deactivateEmployee(String id) {
@@ -346,6 +494,80 @@ public class HrPayrollService {
         return mongo.save(leave);
     }
 
+    public List<Map<String, Object>> overtimeAllowanceRequests(String monthValue) {
+        String month = parseMonth(monthValue).toString();
+        return mongo.find(Query.query(Criteria.where("month").is(month)), OvertimeAllowanceRequest.class)
+                .stream().map(this::overtimeAllowanceView).toList();
+    }
+
+    public List<Map<String, Object>> myOvertimeAllowanceRequests(String email) {
+        Employee employee = employeeForEmail(email);
+        return mongo.find(Query.query(Criteria.where("employeeId").is(employee.getId())),
+                        OvertimeAllowanceRequest.class)
+                .stream().map(this::overtimeAllowanceView).toList();
+    }
+
+    public OvertimeAllowanceRequest requestOvertimeAllowance(
+            LocalDate overtimeDate, BigDecimal hours, String reason, String email) {
+        if (overtimeDate == null) throw badRequest("Overtime date is required");
+        if (overtimeDate.isAfter(LocalDate.now())) throw badRequest("Overtime date cannot be in the future");
+        if (hours == null || hours.signum() <= 0 || hours.compareTo(BigDecimal.valueOf(24)) > 0) {
+            throw badRequest("Overtime hours must be greater than 0 and no more than 24");
+        }
+        requireText(reason, "Reason is required");
+        YearMonth month = YearMonth.from(overtimeDate);
+        PayrollRun run = payrollForMonth(month.toString());
+        if (run != null && !"DRAFT".equals(run.getStatus())) {
+            throw conflict("Overtime requests cannot be added after payroll calculation has started for " + month);
+        }
+        Employee employee = employeeForEmail(email);
+        if (employee.getJoiningDate() != null && overtimeDate.isBefore(employee.getJoiningDate())) {
+            throw badRequest("Overtime date cannot be before the employee joining date");
+        }
+        if (!Set.of("ACTIVE", "ON_LEAVE", "NOTICE_PERIOD").contains(upper(employee.getStatus()))) {
+            throw badRequest("Only current employees can request overtime allowances");
+        }
+        OvertimeAllowanceRequest request = new OvertimeAllowanceRequest();
+        request.setEmployeeId(employee.getId());
+        request.setEmployeeCode(employee.getEmployeeCode());
+        request.setEmployeeName(employee.getFullName());
+        request.setMonth(month.toString());
+        request.setOvertimeDate(overtimeDate);
+        request.setHours(hours.stripTrailingZeros());
+        request.setReason(reason.trim());
+        request.setStatus("PENDING");
+        return mongo.save(request);
+    }
+
+    public OvertimeAllowanceRequest decideOvertimeAllowance(
+            String id, String decision, BigDecimal approvedAmount, String approver) {
+        OvertimeAllowanceRequest request = require(
+                OvertimeAllowanceRequest.class, id, "Overtime allowance request");
+        if (!"PENDING".equals(request.getStatus())) {
+            throw conflict("Only pending overtime allowance requests can be decided");
+        }
+        PayrollRun run = payrollForMonth(request.getMonth());
+        if (run != null && !"DRAFT".equals(run.getStatus())) {
+            throw conflict("Overtime requests cannot be changed after payroll calculation has started");
+        }
+        String normalized = upper(decision);
+        if (!Set.of("APPROVE", "REJECT").contains(normalized)) {
+            throw badRequest("Decision must be approve or reject");
+        }
+        if ("APPROVE".equals(normalized)) {
+            if (approvedAmount == null || approvedAmount.signum() <= 0) {
+                throw badRequest("Enter an approved allowance greater than zero");
+            }
+            request.setApprovedAmount(round(approvedAmount));
+        } else {
+            request.setApprovedAmount(null);
+        }
+        request.setStatus("APPROVE".equals(normalized) ? "APPROVED" : "REJECTED");
+        request.setApprovedBy(approver);
+        request.setApprovedAt(Instant.now());
+        return mongo.save(request);
+    }
+
     public List<SalaryComponent> salaryComponents() {
         return mongo.findAll(SalaryComponent.class);
     }
@@ -441,17 +663,25 @@ public class HrPayrollService {
                 .filter(employee -> employee.getJoiningDate() == null
                         || !employee.getJoiningDate().isAfter(month.atEndOfMonth()))
                 .toList();
+        if (employees.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No eligible employees are set up for " + month
+                            + ". Add and activate employees before calculating payroll.");
+        }
         List<PayrollRun.PayrollItem> items = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+        Map<String, BigDecimal> approvedAllowances = approvedOvertimeAllowances(month.toString());
         for (Employee employee : employees) {
             List<SalaryStructure> structures = salaryStructuresForMonth(employee.getId(), month);
             List<SalaryStructureTimeline.Segment> segments =
                     SalaryStructureTimeline.segments(employee, structures, month);
             if (segments.isEmpty()) {
                 errors.add(employee.getEmployeeCode() + " (" + employee.getFullName()
-                        + ") has a gap in effective salary structures for " + month);
+                        + ") is missing an active salary structure covering the full payroll month (" + month + ")");
             } else {
-                items.add(calculateEmployee(employee, segments, month));
+                PayrollRun.PayrollItem item = calculateEmployee(employee, segments, month);
+                applyOvertimeAllowance(item, approvedAllowances.getOrDefault(employee.getId(), zero()));
+                items.add(item);
             }
         }
         if (!errors.isEmpty()) {
@@ -516,6 +746,9 @@ public class HrPayrollService {
             payslip.setEmployeeEmail(employee.getEmail());
             payslip.setEmployeeName(employee.getFullName());
             payslip.setEmployeeType(employee.getEmployeeType());
+            payslip.setPanNumber(employee.getPanNumber());
+            payslip.setAadhaarLastFour(employee.getAadhaarLastFour());
+            payslip.setPfUanNumber(employee.getPfUanNumber());
             payslip.setDepartmentName(employeeDepartmentName(employee));
             payslip.setDesignationName(designationName(employee.getDesignationId()));
             payslip.setMonth(run.getMonth());
@@ -572,10 +805,14 @@ public class HrPayrollService {
 
     public byte[] payslipPdf(Payslip payslip) {
         List<String> lines = new ArrayList<>();
-        lines.add("MEDCARE  |  PAYSLIP");
-        lines.add("Employee: " + payslip.getEmployeeName() + "  (" + payslip.getEmployeeCode() + ")");
-        lines.add("Role: " + payslip.getEmployeeType() + "  Department: " + payslip.getDepartmentName());
-        lines.add("Payroll month: " + payslip.getMonth());
+        lines.add("EMPLOYEE: " + payslip.getEmployeeName() + "  (" + payslip.getEmployeeCode() + ")");
+        lines.add("PAN: " + defaultValue(payslip.getPanNumber(), "Not provided"));
+        lines.add("Aadhaar: " + (hasText(payslip.getAadhaarLastFour())
+                ? "XXXX XXXX " + payslip.getAadhaarLastFour() : "Not provided"));
+        lines.add("PF / UAN: " + defaultValue(payslip.getPfUanNumber(), "Not provided"));
+        lines.add("Designation: " + defaultValue(payslip.getDesignationName(), "—")
+                + "  Department: " + defaultValue(payslip.getDepartmentName(), "—"));
+        lines.add("Pay period: " + payslip.getMonth());
         lines.add("");
         lines.add("EARNINGS");
         payslip.getEarnings().forEach(item -> lines.add(item.getName() + "    " + money(item.getAmount())));
@@ -738,6 +975,7 @@ public class HrPayrollService {
             else if ("HALF_DAY".equals(record.getStatus())) unpaid.put(record.getAttendanceDate(), new BigDecimal("0.5"));
             overtime = overtime.add(nonNegative(record.getOvertimeHours()));
         }
+
         List<LeaveRequest> leaves = mongo.find(Query.query(Criteria.where("employeeId").is(employee.getId())
                 .and("status").is("APPROVED").and("leaveType").is("UNPAID")
                 .and("fromDate").lte(end).and("toDate").gte(start)), LeaveRequest.class);
@@ -751,6 +989,34 @@ public class HrPayrollService {
         BigDecimal unpaidDays = unpaid.values().stream().reduce(zero(), BigDecimal::add)
                 .min(BigDecimal.valueOf(workingDays));
         return new MonthlyAttendance(workingDays, BigDecimal.valueOf(workingDays).subtract(unpaidDays), overtime);
+    }
+
+    private Map<String, BigDecimal> approvedOvertimeAllowances(String month) {
+        Map<String, BigDecimal> allowances = new HashMap<>();
+        mongo.find(Query.query(Criteria.where("month").is(month).and("status").is("APPROVED")),
+                        OvertimeAllowanceRequest.class)
+                .forEach(request -> allowances.merge(
+                        request.getEmployeeId(), request.getApprovedAmount(), BigDecimal::add));
+        return allowances;
+    }
+
+    static void applyOvertimeAllowance(PayrollRun.PayrollItem item, BigDecimal allowance) {
+        if (allowance == null || allowance.signum() <= 0) return;
+        BigDecimal approvedAmount = round(allowance);
+        PayrollRun.ComponentAmount line = new PayrollRun.ComponentAmount();
+        line.setCode("OVERTIME_ALLOWANCE");
+        line.setName("Approved overtime allowance");
+        line.setAmount(approvedAmount);
+        item.getEarnings().add(line);
+        item.setGrossSalary(round(item.getGrossSalary().add(approvedAmount)));
+        item.setNetSalary(round(item.getNetSalary().add(approvedAmount)));
+    }
+
+    private Map<String, Object> overtimeAllowanceView(OvertimeAllowanceRequest request) {
+        Map<String, Object> row = beanMap(request);
+        row.put("employeeName", request.getEmployeeName());
+        row.put("employeeCode", request.getEmployeeCode());
+        return row;
     }
 
     private List<SalaryStructure> salaryStructuresForMonth(String employeeId, YearMonth month) {
@@ -829,6 +1095,17 @@ public class HrPayrollService {
             Employee duplicate = mongo.findOne(Query.query(Criteria.where("employeeCode").is(code)), Employee.class);
             if (duplicate != null && !duplicate.getId().equals(excludedId)) throw conflict("Employee ID already exists");
         }
+        String panNumber = normalize(employee.getPanNumber());
+        if (panNumber != null && !panNumber.toUpperCase(Locale.ROOT).matches("[A-Z]{5}[0-9]{4}[A-Z]")) {
+            throw badRequest("PAN must contain 10 characters in the format ABCDE1234F");
+        }
+        String aadhaarLastFour = normalize(employee.getAadhaarLastFour());
+        if (aadhaarLastFour != null && !aadhaarLastFour.matches("[0-9]{4}")) {
+            throw badRequest("Enter only the last four Aadhaar digits");
+        }
+        if (employee.getPfUanNumber() != null && employee.getPfUanNumber().length() > 30) {
+            throw badRequest("PF / UAN number cannot exceed 30 characters");
+        }
     }
 
     private void ensureUniqueCode(Class<?> type, String code, String id, String label) {
@@ -881,6 +1158,8 @@ public class HrPayrollService {
 
     private Map<String, Object> employeeView(Employee employee) {
         Map<String, Object> row = beanMap(employee);
+        row.remove("aadhaarNumber");
+        row.put("hasAadhaarNumber", hasText(employee.getAadhaarLastFour()));
         row.put("name", employee.getFullName());
         row.put("departmentName", employeeDepartmentName(employee));
         row.put("designationName", designationName(employee.getDesignationId()));
@@ -978,7 +1257,11 @@ public class HrPayrollService {
 
     private static byte[] createPdf(List<String> lines) {
         try {
-            StringBuilder text = new StringBuilder("BT /F1 11 Tf 52 790 Td 15 TL\n");
+            StringBuilder text = new StringBuilder("q 0.05 0.42 0.35 rg 52 790 28 28 re f Q\n")
+                    .append("q 1 1 1 rg 62 794 8 20 re f 56 800 20 8 re f Q\n")
+                    .append("BT /F1 15 Tf 88 803 Td (MEDCARE) Tj ET\n")
+                    .append("BT /F1 9 Tf 88 790 Td (MONTHLY SALARY SLIP) Tj ET\n")
+                    .append("BT /F1 11 Tf 52 766 Td 15 TL\n");
             for (String line : lines) {
                 String safe = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)");
                 text.append('(').append(safe).append(") Tj T*\n");
@@ -1052,6 +1335,12 @@ public class HrPayrollService {
 
     private static String normalize(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static void normalizeStatutoryIdentifiers(Employee employee) {
+        employee.setPanNumber(upper(normalize(employee.getPanNumber())));
+        employee.setAadhaarLastFour(normalize(employee.getAadhaarLastFour()));
+        employee.setPfUanNumber(upper(normalize(employee.getPfUanNumber())));
     }
 
     private static String normalizeEmail(String value) {

@@ -1,6 +1,7 @@
 package com.example.MedcareApp.Entity.pharmacy;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
@@ -37,6 +38,7 @@ public class MedicationPrescription {
         private String frequency;
         private String duration;
         private int quantity;
+        private BigDecimal unitPrice;
         private String instructions;
         private String status = "PENDING";
     }

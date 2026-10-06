@@ -112,7 +112,8 @@ public class DoctorPortalController {
         }
         return Map.of(
                 "patient", patient,
-                "consultations", consultationRepository.findAllByPatientIdOrderByCreatedAtDesc(patientId));
+                "consultations", consultationRepository.findAllByPatientIdOrderByCreatedAtDesc(patientId),
+                "prescriptions", pharmacyService.getMedicationPrescriptionsForPatient(patientId));
     }
 
     @PostMapping("/consultations")

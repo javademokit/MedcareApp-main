@@ -9,4 +9,6 @@ import org.springframework.stereotype.Repository;
 public interface StaffShiftRepository extends MongoRepository<StaffShift, String> {
     List<StaffShift> findAllByOrderByShiftDateAscStartTimeAsc();
     List<StaffShift> findAllByStaffIdAndShiftDate(String staffId, String shiftDate);
+    List<StaffShift> findAllByStaffIdInAndStaffRoleIgnoreCaseOrderByShiftDateAscStartTimeAsc(
+            List<String> staffIds, String staffRole);
 }

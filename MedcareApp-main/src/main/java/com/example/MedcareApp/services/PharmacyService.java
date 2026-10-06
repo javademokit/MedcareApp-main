@@ -3,6 +3,7 @@ package com.example.MedcareApp.services;
 import com.example.MedcareApp.Entity.pharmacy.MedicationItem;
 import com.example.MedcareApp.Entity.pharmacy.MedicationPrescription;
 import com.example.MedcareApp.Entity.pharmacy.PrescriptionIssue;
+import com.example.MedcareApp.Entity.pharmacy.PharmacyInvoice;
 import com.example.MedcareApp.Entity.pharmacy.PurchaseOrder;
 import com.example.MedcareApp.Entity.Patient;
 import com.example.MedcareApp.Interafce.MedicationPrescriptionRepository;
@@ -32,6 +33,7 @@ public class PharmacyService {
     private final PrescriptionIssueRepository prescriptionIssueRepository;
     private final PatientRepository patientRepository;
     private final MedicationPrescriptionRepository medicationPrescriptionRepository;
+    private final PharmacyBillingService pharmacyBillingService;
 
     public List<MedicationItem> getInventory() {
         return medicationRepository.findAll();
@@ -100,6 +102,10 @@ public class PharmacyService {
             MedicationItem item = medicationRepository.findById(order.getMedicationId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                             "A selected medicine is no longer in the pharmacy catalog"));
+            if (item.getUnitPrice() == null || item.getUnitPrice().signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        item.getName() + " has no valid price in the pharmacy catalog");
+            }
             MedicationPrescription.MedicationLine line = new MedicationPrescription.MedicationLine();
             line.setMedicationId(item.getId());
             line.setName(item.getName());
@@ -111,15 +117,29 @@ public class PharmacyService {
             line.setFrequency(order.getFrequency().trim());
             line.setDuration(order.getDuration().trim());
             line.setQuantity(order.getQuantity());
+            line.setUnitPrice(item.getUnitPrice());
             line.setInstructions(blank(order.getInstructions()) ? null : order.getInstructions().trim());
             lines.add(line);
         }
         prescription.setMedications(lines);
-        return medicationPrescriptionRepository.save(prescription);
+        MedicationPrescription savedPrescription = medicationPrescriptionRepository.save(prescription);
+        pharmacyBillingService.createInvoiceForPrescription(savedPrescription);
+        return savedPrescription;
     }
 
     public List<MedicationPrescription> getMedicationPrescriptions() {
-        return medicationPrescriptionRepository.findAllByOrderByCreatedAtDesc();
+        List<MedicationPrescription> prescriptions = medicationPrescriptionRepository.findAllByOrderByCreatedAtDesc();
+        prescriptions.stream().filter(prescription -> "PENDING".equals(prescription.getStatus()))
+                .forEach(pharmacyBillingService::createInvoiceForPrescription);
+        return prescriptions;
+    }
+
+    public List<MedicationPrescription> getMedicationPrescriptionsForPatient(String patientId) {
+        return medicationPrescriptionRepository.findAllByPatientIdOrderByCreatedAtDesc(patientId);
+    }
+
+    public List<PharmacyInvoice> getPharmacyInvoices() {
+        return pharmacyBillingService.getInvoices();
     }
 
     public MedicationPrescription dispenseMedicationPrescription(String id, String issuedBy) {
@@ -128,6 +148,7 @@ public class PharmacyService {
         if (!"PENDING".equals(prescription.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Prescription has already been dispensed");
         }
+        pharmacyBillingService.requirePaidPrescription(prescription);
         LocalDate today = LocalDate.now();
         List<MedicationItem> stockItems = new ArrayList<>();
         for (MedicationPrescription.MedicationLine line : prescription.getMedications()) {
@@ -212,15 +233,24 @@ public class PharmacyService {
         }
         MedicationItem medication = medicationRepository.findById(issue.getMedicationId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Medication not found"));
+        if (medication.getUnitPrice() == null || medication.getUnitPrice().signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    medication.getName() + " has no valid price in the pharmacy catalog");
+        }
         issue.setPatientName(patients.get(0).getPatientName());
         issue.setMedicationName(medication.getName());
         issue.setStatus("PENDING");
         issue.setCreatedAt(Instant.now());
-        return prescriptionIssueRepository.save(issue);
+        PrescriptionIssue savedIssue = prescriptionIssueRepository.save(issue);
+        pharmacyBillingService.createInvoiceForIssue(savedIssue);
+        return savedIssue;
     }
 
     public List<PrescriptionIssue> getPrescriptionIssues() {
-        return prescriptionIssueRepository.findAll();
+        List<PrescriptionIssue> issues = prescriptionIssueRepository.findAll();
+        issues.stream().filter(issue -> "PENDING".equals(issue.getStatus()))
+                .forEach(pharmacyBillingService::createInvoiceForIssue);
+        return issues;
     }
 
     public PrescriptionIssue dispensePrescription(String id, String issuedBy) {
@@ -229,6 +259,7 @@ public class PharmacyService {
         if (!"PENDING".equals(issue.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Prescription is not pending");
         }
+        pharmacyBillingService.requirePaidIssue(issue);
         MedicationItem medication = medicationRepository.findById(issue.getMedicationId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Medication not found"));
         if (medication.getQuantityOnHand() < issue.getQuantity()) {

@@ -21,6 +21,44 @@ public class StaffShiftService {
         return repository.findAllByOrderByShiftDateAscStartTimeAsc();
     }
 
+    public List<StaffShift> getDoctorShifts(List<String> staffIds) {
+        if (staffIds.isEmpty()) return List.of();
+        return repository.findAllByStaffIdInAndStaffRoleIgnoreCaseOrderByShiftDateAscStartTimeAsc(
+                staffIds, "Doctor");
+    }
+
+    public StaffShift checkInDoctorForStaff(String id, List<String> staffIds) {
+        return updateDoctorAttendance(id, staffIds, true);
+    }
+
+    public StaffShift checkOutDoctorForStaff(String id, List<String> staffIds) {
+        return updateDoctorAttendance(id, staffIds, false);
+    }
+
+    private StaffShift updateDoctorAttendance(String id, List<String> staffIds, boolean checkIn) {
+        StaffShift shift = getDoctorShiftForToday(id);
+        if (!staffIds.contains(shift.getStaffId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "This shift is not assigned to your doctor profile");
+        }
+        if (checkIn) {
+            if (!"SCHEDULED".equals(shift.getStatus())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Only a scheduled doctor shift can be checked in");
+            }
+            shift.setStatus("ON_DUTY");
+            shift.setCheckInAt(Instant.now());
+        } else {
+            if (!"ON_DUTY".equals(shift.getStatus()) || shift.getCheckInAt() == null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Doctor must be checked in before checking out");
+            }
+            shift.setStatus("COMPLETED");
+            shift.setCheckOutAt(Instant.now());
+        }
+        return repository.save(shift);
+    }
+
     public StaffShift createShift(StaffShift shift) {
         validateShift(shift, null);
         shift.setStatus("SCHEDULED");

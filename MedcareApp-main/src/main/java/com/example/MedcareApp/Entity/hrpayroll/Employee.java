@@ -25,11 +25,16 @@ public class Employee {
     private String email;
     private String address;
     private String emergencyContact;
+    private String panNumber;
+    private String aadhaarLastFour;
+    private String pfUanNumber;
     private String employeeType;
     private String departmentId;
     private String departmentName;
     private String designationId;
     private String doctorProfileId;
+    private Double doctorConsultationFee;
+    private List<String> doctorAvailableTimes = new ArrayList<>();
     private LocalDate joiningDate;
     private String employmentType;
     private String managerId;
@@ -38,6 +43,7 @@ public class Employee {
     private String shiftId;
     private Map<String, Object> professionalInfo = new LinkedHashMap<>();
     private List<String> documentLinks = new ArrayList<>();
+    private Map<String, Map<String, String>> onboardingDocuments = new LinkedHashMap<>();
     private Instant createdAt = Instant.now();
     private Instant updatedAt = Instant.now();
 

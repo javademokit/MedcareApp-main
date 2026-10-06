@@ -6,6 +6,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Designation;
 import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.hrpayroll.EmployeeType;
 import com.example.MedcareApp.Entity.hrpayroll.LeaveRequest;
+import com.example.MedcareApp.Entity.hrpayroll.OvertimeAllowanceRequest;
 import com.example.MedcareApp.Entity.hrpayroll.PayrollRun;
 import com.example.MedcareApp.Entity.hrpayroll.Payslip;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryComponent;
@@ -13,9 +14,12 @@ import com.example.MedcareApp.Entity.hrpayroll.SalaryStructure;
 import com.example.MedcareApp.Entity.hrpayroll.Shift;
 import com.example.MedcareApp.services.HrPayrollService;
 import java.security.Principal;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -30,6 +34,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api")
@@ -234,6 +239,51 @@ public class HrPayrollController {
         return service.decideLeave(id, "REJECT", principal.getName());
     }
 
+    @GetMapping("/overtime-allowances")
+    @PreAuthorize(HR_ROLES)
+    public List<Map<String, Object>> overtimeAllowanceRequests(@RequestParam String month) {
+        return service.overtimeAllowanceRequests(month);
+    }
+
+    @GetMapping("/overtime-allowances/mine")
+    @PreAuthorize(STAFF_ROLES)
+    public List<Map<String, Object>> myOvertimeAllowanceRequests(Principal principal) {
+        return service.myOvertimeAllowanceRequests(principal.getName());
+    }
+
+    @PostMapping("/overtime-allowances")
+    @PreAuthorize(STAFF_ROLES)
+    public OvertimeAllowanceRequest requestOvertimeAllowance(
+            @RequestBody Map<String, String> request, Principal principal) {
+        try {
+            LocalDate overtimeDate = LocalDate.parse(request.getOrDefault("overtimeDate", ""));
+            BigDecimal hours = new BigDecimal(request.getOrDefault("hours", ""));
+            return service.requestOvertimeAllowance(overtimeDate, hours, request.get("reason"), principal.getName());
+        } catch (java.time.format.DateTimeParseException | NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Enter a valid overtime date and number of hours");
+        }
+    }
+
+    @PutMapping("/overtime-allowances/{id}/approve")
+    @PreAuthorize(HR_ROLES)
+    public OvertimeAllowanceRequest approveOvertimeAllowance(
+            @PathVariable String id, @RequestBody Map<String, String> request, Principal principal) {
+        try {
+            BigDecimal amount = new BigDecimal(request.getOrDefault("approvedAmount", ""));
+            return service.decideOvertimeAllowance(id, "APPROVE", amount, principal.getName());
+        } catch (NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Enter a valid approved allowance amount");
+        }
+    }
+
+    @PutMapping("/overtime-allowances/{id}/reject")
+    @PreAuthorize(HR_ROLES)
+    public OvertimeAllowanceRequest rejectOvertimeAllowance(@PathVariable String id, Principal principal) {
+        return service.decideOvertimeAllowance(id, "REJECT", null, principal.getName());
+    }
+
     @GetMapping("/salary/components")
     @PreAuthorize(PAYROLL_ROLES)
     public List<SalaryComponent> salaryComponents() {
@@ -291,8 +341,22 @@ public class HrPayrollController {
 
     @PostMapping("/payroll/{id}/calculate")
     @PreAuthorize(PAYROLL_ROLES)
-    public PayrollRun calculatePayroll(@PathVariable String id) {
-        return service.calculatePayroll(id);
+    public ResponseEntity<?> calculatePayroll(@PathVariable String id) {
+        try {
+            return ResponseEntity.ok(service.calculatePayroll(id));
+        } catch (ResponseStatusException exception) {
+            String reason = exception.getReason();
+            String message = reason == null
+                    ? "Payroll calculation failed. Review employee eligibility and salary setup."
+                    : reason;
+            if (reason != null && reason.startsWith("Payroll cannot be calculated:")) {
+                message += ". Open Salary → Salary Structures and assign each listed employee an active structure "
+                        + "whose effective dates cover the full payroll month, then calculate again.";
+            }
+            return ResponseEntity.status(exception.getStatusCode()).body(Map.of(
+                    "message", message,
+                    "status", exception.getStatusCode().value()));
+        }
     }
 
     @PostMapping("/payroll/{id}/approve")

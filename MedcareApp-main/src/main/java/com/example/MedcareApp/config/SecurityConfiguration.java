@@ -88,7 +88,7 @@ public class SecurityConfiguration {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(List.of(allowedOrigin));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
+        configuration.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "Authorization"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
@@ -105,7 +105,8 @@ public class SecurityConfiguration {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-                        .ignoringRequestMatchers("/api/billing/appointment-invoices/gateway/payu/callback"))
+                        .ignoringRequestMatchers("/api/billing/appointment-invoices/gateway/payu/callback",
+                                "/api/ambulance/tracking/pair", "/api/ambulance/tracking/location"))
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authenticationProvider(authenticationProvider)
                 .authorizeHttpRequests(authorize -> authorize
@@ -143,6 +144,8 @@ public class SecurityConfiguration {
                                 "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
                                 "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
                         .requestMatchers("/api/payroll/**", "/api/payslips/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
+                        .requestMatchers("/api/payroll/run/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
                         .requestMatchers(HttpMethod.POST,
                                 "/api/billing/appointment-invoices/gateway/payu/callback").permitAll()
@@ -232,21 +235,32 @@ public class SecurityConfiguration {
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
                                 "HEAD_NURSE")
                         .requestMatchers("/api/medical-tests/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "LAB_TECHNICIAN")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "CRM_EXECUTIVE", "LAB_TECHNICIAN")
                         .requestMatchers("/api/urinetests/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "LAB_TECHNICIAN")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "CRM_EXECUTIVE", "LAB_TECHNICIAN")
                         .requestMatchers("/api/emergency/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST", "CRM_EXECUTIVE")
+                        .requestMatchers(HttpMethod.POST, "/api/ambulance/tracking/pair",
+                                "/api/ambulance/tracking/location").permitAll()
+                        .requestMatchers("/api/ambulance/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
+                                "RECEPTIONIST", "BILLING_EXECUTIVE", "FINANCE")
+                        .requestMatchers("/api/pharmacy/invoices/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
+                                "PHARMACIST", "BILLING_EXECUTIVE", "FINANCE")
                         .requestMatchers("/api/pharmacy/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "PHARMACIST")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "PHARMACIST")
                         .requestMatchers("/api/discharges/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "BILLING_EXECUTIVE")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "CRM_EXECUTIVE", "BILLING_EXECUTIVE")
+                        .requestMatchers(HttpMethod.GET, "/api/staff/shifts/mine").hasRole("DOCTOR")
+                        .requestMatchers(HttpMethod.POST, "/api/staff/shifts/mine/*/check-in",
+                                "/api/staff/shifts/mine/*/check-out").hasRole("DOCTOR")
                         .requestMatchers("/api/staff/shifts/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE")
                         .requestMatchers("/api/daily-updates/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE")
                         .requestMatchers("/api/reports/**").hasAnyRole(
-                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "BILLING_EXECUTIVE")
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "BILLING_EXECUTIVE")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(
                     new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
