@@ -5,6 +5,7 @@ import com.example.MedcareApp.Entity.nursing.NurseHandover;
 import com.example.MedcareApp.Entity.nursing.BedStaySegment;
 import com.example.MedcareApp.Entity.nursing.BedWaitingListEntry;
 import com.example.MedcareApp.Entity.nursing.NurseProfile;
+import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.nursing.NurseShiftRoster;
 import com.example.MedcareApp.Entity.nursing.NurseShiftSwap;
 import com.example.MedcareApp.Entity.nursing.NursingCareRecord;
@@ -67,20 +68,41 @@ public class NursingController {
                 .filter(account -> account.isActive()
                         && (account.getRoles().contains("NURSE") || account.getRoles().contains("HEAD_NURSE")))
                 .filter(account -> !headNurseOnly || profiles.containsKey(account.getId()))
-                .sorted(Comparator.comparing(user::getUserId, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
-                .map(account -> {
+                .map(account -> new NurseAccountEmployment(
+                        account, nursingService.getNurseEmploymentByEmail(account.getEmailId())))
+                .filter(entry -> entry.employment() != null)
+                .sorted(Comparator.comparing(
+                        entry -> entry.account().getUserId(),
+                        Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .map(entry -> {
+                    user account = entry.account();
+                    Employee employment = entry.employment();
                     NurseProfile profile = profiles.get(account.getId());
-                    return Map.<String, Object>of(
-                            "id", account.getId(),
-                            "userId", account.getUserId() == null ? "" : account.getUserId(),
-                            "emailId", account.getEmailId() == null ? "" : account.getEmailId(),
-                            "mobileNo", account.getMobileNo() == null ? "" : account.getMobileNo(),
-                            "profile", profile == null || !mayViewFullProfiles ? Map.of() : profile,
-                            "profileComplete", profile != null,
-                            "status", profile == null ? "PROFILE_REQUIRED" : profile.getStatus(),
-                            "name", profile == null ? account.getUserId() : profile.getName());
+                    boolean employmentActive = employment != null
+                            && "ACTIVE".equalsIgnoreCase(employment.getStatus())
+                            && StringUtils.hasText(employment.getEmployeeCode());
+                    String nurseName = employment != null && StringUtils.hasText(employment.getFullName())
+                            ? employment.getFullName()
+                            : profile == null ? account.getUserId() : profile.getName();
+                    return Map.<String, Object>ofEntries(
+                            Map.entry("id", account.getId()),
+                            Map.entry("userId", account.getUserId() == null ? "" : account.getUserId()),
+                            Map.entry("emailId", account.getEmailId() == null ? "" : account.getEmailId()),
+                            Map.entry("mobileNo", employment != null && StringUtils.hasText(employment.getMobile())
+                                    ? employment.getMobile() : account.getMobileNo() == null ? "" : account.getMobileNo()),
+                            Map.entry("profile", profile == null || !mayViewFullProfiles ? Map.of() : profile),
+                            Map.entry("profileComplete", profile != null),
+                            Map.entry("status", profile == null ? "PROFILE_REQUIRED" : profile.getStatus()),
+                            Map.entry("name", nurseName == null ? "" : nurseName),
+                            Map.entry("employeeCode", employment == null || employment.getEmployeeCode() == null
+                                    ? "" : employment.getEmployeeCode()),
+                            Map.entry("employmentStatus", employment == null || employment.getStatus() == null
+                                    ? "NOT_LINKED" : employment.getStatus()),
+                            Map.entry("employmentActive", employmentActive));
                 }).toList();
     }
+
+    private record NurseAccountEmployment(user account, Employee employment) {}
 
     @PutMapping("/nurses/{accountId}/profile")
     public NurseProfile saveNurseProfile(
@@ -285,6 +307,17 @@ public class NursingController {
     @GetMapping("/dashboard")
     public List<Map<String, Object>> nurseDashboard(Principal principal) {
         return nursingService.getNurseDashboard(getAccount(principal).getId());
+    }
+
+    @GetMapping("/nurses/{nurseId}/assignments")
+    public List<Map<String, Object>> nurseAssignments(
+            @PathVariable String nurseId, Principal principal) {
+        user currentAccount = getAccount(principal);
+        if (!currentAccount.getRoles().contains("NURSE")
+                && !currentAccount.getRoles().contains("HEAD_NURSE")) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nurse access is required");
+        }
+        return nursingService.getNurseDashboard(nurseId);
     }
 
     @PostMapping("/patients/{patientId}/assignments")

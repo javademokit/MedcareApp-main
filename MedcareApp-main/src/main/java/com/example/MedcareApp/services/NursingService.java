@@ -14,8 +14,8 @@ import com.example.MedcareApp.Entity.nursing.BedWaitingListEntry;
 import com.example.MedcareApp.Entity.nursing.Ward;
 import com.example.MedcareApp.Entity.nursing.WardBed;
 import com.example.MedcareApp.Entity.nursing.WardRoom;
+import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.user;
-import com.example.MedcareApp.services.StaffIdentifierGenerator;
 import com.example.MedcareApp.Interafce.ConsultationRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.Interafce.UserRepository;
@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -75,13 +76,14 @@ public class NursingService {
     private final MongoTemplate mongoTemplate;
 
     public List<NurseProfile> getNurseProfiles() {
-        return nurseProfileRepository.findAll().stream().map(profile -> {
-            if (!StringUtils.hasText(profile.getEmployeeId()) || !profile.getEmployeeId().startsWith("NS-")) {
-                profile.setEmployeeId(StaffIdentifierGenerator.generate("NS"));
-                return nurseProfileRepository.save(profile);
-            }
-            return profile;
-        }).toList();
+        return nurseProfileRepository.findAll();
+    }
+
+    public Employee getNurseEmploymentByEmail(String email) {
+        if (!StringUtils.hasText(email)) return null;
+        String escapedEmail = "^" + Pattern.quote(email.trim()) + "$";
+        return mongoTemplate.findOne(Query.query(Criteria.where("employeeType").is("NURSE")
+                .and("email").regex(escapedEmail, "i")), Employee.class);
     }
 
     public List<NurseProfile> getNurseProfilesForManager(String accountId) {
@@ -102,40 +104,38 @@ public class NursingService {
     public NurseProfile saveNurseProfile(String accountId, NurseProfile profile, String actor) {
         requireProfileScope(accountId, actor);
         user account = getNurseAccount(accountId);
-        if (profile == null || !StringUtils.hasText(profile.getName())
-                || !StringUtils.hasText(profile.getLicenseNumber())
-                || !StringUtils.hasText(profile.getDesignation())
-                || !StringUtils.hasText(profile.getSpecialization())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Name, license number, designation, and specialization are required");
-        }
-        String designation = normalize(profile.getDesignation());
+        Employee employment = getNurseEmploymentByEmail(account.getEmailId());
+        Map<String, Object> professionalInfo = employment.getProfessionalInfo() == null
+                ? Map.of() : employment.getProfessionalInfo();
+        String licenseNumber = textValue(professionalInfo.get("registrationNumber"));
+        String specialization = defaultValue(textValue(professionalInfo.get("specialization")), "GENERAL");
+        String designation = account.getRoles().contains("HEAD_NURSE") ? "HEAD_NURSE" : "STAFF_NURSE";
         if (!DESIGNATIONS.contains(designation)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select a valid nurse designation");
         }
-        boolean duplicateProfile = nurseProfileRepository.findAll().stream()
+        boolean duplicateProfile = StringUtils.hasText(licenseNumber) && nurseProfileRepository.findAll().stream()
                 .filter(existing -> !account.getId().equals(existing.getAccountId()))
-                .anyMatch(existing -> profile.getLicenseNumber().trim().equalsIgnoreCase(existing.getLicenseNumber()));
+                .anyMatch(existing -> licenseNumber.equalsIgnoreCase(existing.getLicenseNumber()));
         if (duplicateProfile) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "License number must be unique across nurse profiles");
         }
-        String status = StringUtils.hasText(profile.getStatus()) ? normalize(profile.getStatus()) : "ACTIVE";
+        String status = profile != null && StringUtils.hasText(profile.getStatus())
+                ? normalize(profile.getStatus()) : "ACTIVE";
         if (!NURSE_STATUSES.contains(status)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select Active, On leave, or Inactive status");
         }
         NurseProfile saved = nurseProfileRepository.findByAccountId(account.getId()).orElseGet(NurseProfile::new);
         saved.setAccountId(account.getId());
-        saved.setName(profile.getName().trim());
-        saved.setPhotoUrl(trimToNull(profile.getPhotoUrl()));
-        saved.setPhone(trimToNull(profile.getPhone()));
+        saved.setName(defaultValue(employment.getFullName(), account.getUserId()));
+        saved.setPhotoUrl(profile == null ? saved.getPhotoUrl() : trimToNull(profile.getPhotoUrl()));
+        saved.setPhone(defaultValue(employment.getMobile(), account.getMobileNo()));
         saved.setEmail(account.getEmailId());
-        saved.setEmployeeId(StringUtils.hasText(saved.getEmployeeId()) && saved.getEmployeeId().startsWith("NS-")
-                ? saved.getEmployeeId() : StaffIdentifierGenerator.generate("NS"));
-        saved.setQualification(trimToNull(profile.getQualification()));
-        saved.setLicenseNumber(profile.getLicenseNumber().trim());
+        saved.setEmployeeId(employment.getEmployeeCode());
+        saved.setQualification(trimToNull(textValue(professionalInfo.get("qualification"))));
+        saved.setLicenseNumber(licenseNumber);
         saved.setDesignation(designation);
-        saved.setSpecialization(profile.getSpecialization().trim());
+        saved.setSpecialization(specialization);
         saved.setStatus(status);
         NurseProfile updated = nurseProfileRepository.save(saved);
         if (!"ACTIVE".equals(status)) {
@@ -739,6 +739,7 @@ public class NursingService {
         if (!"ACTIVE".equals(nurse.getStatus()) || !isActiveNurseAccount(nurse.getAccountId())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only active nurses can be scheduled");
         }
+        getNurseAccount(nurse.getAccountId());
         requireWard(roster.getWardId());
         boolean overlap = rosterRepository.findByNurseIdAndStatus(nurse.getAccountId(), "SCHEDULED").stream()
                 .filter(existing -> existing.getShift().equals(roster.getShift()))
@@ -1315,6 +1316,7 @@ public class NursingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     nurse.getName() + " is not an active nurse and cannot receive an assignment");
         }
+        getNurseAccount(nurse.getAccountId());
         boolean onDuty = rosterRepository.findByWardIdAndStatus(ward.getId(), "SCHEDULED").stream()
                 .anyMatch(roster -> nurse.getAccountId().equals(roster.getNurseId())
                         && shift.equals(roster.getShift())
@@ -1396,7 +1398,21 @@ public class NursingService {
         if (!account.isActive() || !isNurse(account)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected account is not an active nurse");
         }
+        Employee employment = getNurseEmploymentByEmail(account.getEmailId());
+        if (employment == null || !"ACTIVE".equalsIgnoreCase(employment.getStatus())
+                || !StringUtils.hasText(employment.getEmployeeCode())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Complete an active nurse employment record with an employee ID in HR before scheduling or assigning this nurse");
+        }
         return account;
+    }
+
+    private String textValue(Object value) {
+        return value == null ? null : trimToNull(String.valueOf(value));
+    }
+
+    private String defaultValue(String value, String fallback) {
+        return StringUtils.hasText(value) ? value.trim() : fallback;
     }
 
     private boolean isNurse(user account) {

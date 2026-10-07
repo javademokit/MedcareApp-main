@@ -174,6 +174,8 @@ public class SecurityConfiguration {
                         .requestMatchers("/api/appointments1/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "RECEPTIONIST",
                                 "CRM_EXECUTIVE")
+                        .requestMatchers(HttpMethod.GET, "/api/nursing/nurses/*/assignments").hasAnyRole(
+                                "NURSE", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.GET, "/api/nursing/nurses").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
                                 "NURSE", "HEAD_NURSE")

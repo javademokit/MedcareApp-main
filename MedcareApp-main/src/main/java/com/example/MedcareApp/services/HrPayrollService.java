@@ -247,8 +247,10 @@ public class HrPayrollService {
         employee.setEmployeeCode(normalize(employee.getEmployeeCode()));
         normalizeStatutoryIdentifiers(employee);
         if (employee.getEmployeeCode() == null) {
-            employee.setEmployeeCode(StaffIdentifierGenerator.generate(
-                    "DOCTOR".equals(upper(employee.getEmployeeType())) ? "DT" : "EMP"));
+            String employeeType = upper(employee.getEmployeeType());
+            String prefix = "DOCTOR".equals(employeeType) ? "DT"
+                    : "NURSE".equals(employeeType) ? "NUR" : "EMP";
+            employee.setEmployeeCode(StaffIdentifierGenerator.generate(prefix));
         }
         employee.setEmployeeType(upper(employee.getEmployeeType()));
         employee.setDepartmentName(employeeDepartmentName(employee));

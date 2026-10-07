@@ -65,6 +65,30 @@ class HrPayrollServiceTest {
     }
 
     @Test
+    void generatesNurseSpecificEmployeeIdForNurseEmployment() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        EmployeeType nurseType = new EmployeeType();
+        nurseType.setCode("NURSE");
+        nurseType.setName("Nurse");
+        nurseType.setStatus("ACTIVE");
+        when(mongo.findAll(EmployeeType.class)).thenReturn(List.of(nurseType));
+        when(mongo.findOne(any(Query.class), eq(Employee.class))).thenReturn(null);
+        when(mongo.save(any(Employee.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Employee employee = new Employee();
+        employee.setFirstName("Anita");
+        employee.setLastName("Sharma");
+        employee.setMobile("5551234567");
+        employee.setEmail("anita@example.test");
+        employee.setEmployeeType("NURSE");
+        employee.setJoiningDate(LocalDate.of(2026, 10, 1));
+
+        Employee created = new HrPayrollService(mongo).saveEmployee(employee);
+
+        assertEquals("NUR-", created.getEmployeeCode().substring(0, 4));
+    }
+
+    @Test
     void includesCompanyBrandingAndMaskedIdentityDetailsInPayslipPdf() {
         Payslip payslip = new Payslip();
         payslip.setEmployeeName("Riya Shah");

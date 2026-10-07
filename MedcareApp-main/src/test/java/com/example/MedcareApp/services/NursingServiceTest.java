@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.MedcareApp.Entity.Patient;
+import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.nursing.NurseProfile;
 import com.example.MedcareApp.Entity.nursing.NurseShiftRoster;
 import com.example.MedcareApp.Entity.nursing.PatientAssignment;
@@ -101,7 +103,12 @@ class NursingServiceTest {
         manager.setRoles(Set.of("CRM_EXECUTIVE"));
         user nurseAccount = new user();
         nurseAccount.setId("nurse-1");
+        nurseAccount.setEmailId("nurse@example.test");
         nurseAccount.setRoles(Set.of("NURSE"));
+        Employee employment = new Employee();
+        employment.setEmployeeType("NURSE");
+        employment.setEmployeeCode("EMP-10001");
+        employment.setStatus("ACTIVE");
 
         when(userRepository.findById("crm@example.test")).thenReturn(Optional.empty());
         when(userRepository.findAllByEmailIdIgnoreCase("crm@example.test")).thenReturn(List.of(manager));
@@ -109,6 +116,7 @@ class NursingServiceTest {
         when(wardRepository.findById("ward-1")).thenReturn(Optional.of(ward));
         when(nurseProfileRepository.findByAccountId("nurse-1")).thenReturn(Optional.of(profile));
         when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
+        when(mongoTemplate.findOne(any(), eq(Employee.class))).thenReturn(employment);
         when(rosterRepository.findByWardIdAndStatus("ward-1", "SCHEDULED")).thenReturn(List.of(roster));
         when(assignmentRepository.findByNurseIdAndStatus("nurse-1", "ACTIVE")).thenReturn(List.of(existing));
 
@@ -117,6 +125,47 @@ class NursingServiceTest {
 
         assertEquals(409, error.getStatusCode().value());
         assertTrue(error.getReason().contains("nurse-to-patient limit"));
+    }
+
+    @Test
+    void nurseProfileUsesTheActiveHrEmploymentIdAndDetails() {
+        user admin = new user();
+        admin.setId("admin-1");
+        admin.setRoles(Set.of("HOSPITAL_ADMIN"));
+        user nurseAccount = new user();
+        nurseAccount.setId("nurse-1");
+        nurseAccount.setEmailId("nurse@example.test");
+        nurseAccount.setMobileNo("555-0100");
+        nurseAccount.setUserId("nurse.login");
+        nurseAccount.setRoles(Set.of("NURSE"));
+        Employee employment = new Employee();
+        employment.setEmployeeType("NURSE");
+        employment.setEmployeeCode("EMP-10001");
+        employment.setFirstName("Anita");
+        employment.setLastName("Sharma");
+        employment.setMobile("555-0199");
+        employment.setStatus("ACTIVE");
+        employment.setProfessionalInfo(java.util.Map.of(
+                "registrationNumber", "RN-123",
+                "qualification", "BSc Nursing",
+                "specialization", "ICU"));
+
+        when(userRepository.findById("admin@example.test")).thenReturn(Optional.empty());
+        when(userRepository.findAllByEmailIdIgnoreCase("admin@example.test")).thenReturn(List.of(admin));
+        when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
+        when(mongoTemplate.findOne(any(), eq(Employee.class))).thenReturn(employment);
+        when(nurseProfileRepository.findByAccountId("nurse-1")).thenReturn(Optional.empty());
+        when(nurseProfileRepository.findAll()).thenReturn(List.of());
+        when(nurseProfileRepository.save(any(NurseProfile.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        NurseProfile saved = service.saveNurseProfile("nurse-1", new NurseProfile(), "admin@example.test");
+
+        assertEquals("EMP-10001", saved.getEmployeeId());
+        assertEquals("Anita Sharma", saved.getName());
+        assertEquals("555-0199", saved.getPhone());
+        assertEquals("RN-123", saved.getLicenseNumber());
+        assertEquals("BSc Nursing", saved.getQualification());
+        assertEquals("ICU", saved.getSpecialization());
     }
 
     @Test
