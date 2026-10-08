@@ -6,4 +6,5 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 
 public interface NurseHandoverRepository extends MongoRepository<NurseHandover, String> {
     List<NurseHandover> findByToNurseIdAndStatusOrderByCreatedAtDesc(String toNurseId, String status);
+    List<NurseHandover> findAllByOrderByCreatedAtDesc();
 }

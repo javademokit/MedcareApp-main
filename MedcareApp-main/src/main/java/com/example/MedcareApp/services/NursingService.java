@@ -86,6 +86,96 @@ public class NursingService {
                 .and("email").regex(escapedEmail, "i")), Employee.class);
     }
 
+    private Employee getNurseEmploymentByEmployeeCode(String employeeCode) {
+        if (!StringUtils.hasText(employeeCode)) return null;
+        return mongoTemplate.findOne(Query.query(Criteria.where("employeeType").is("NURSE")
+                .and("employeeCode").is(employeeCode)), Employee.class);
+    }
+
+    public List<Employee> getNurseEmployments() {
+        return mongoTemplate.find(Query.query(Criteria.where("employeeType").is("NURSE")), Employee.class);
+    }
+
+    public Employee createWalkInNurse(
+            String firstName, String lastName, String mobile, String email,
+            String qualification, String licenseNumber, String specialization) {
+        String normalizedFirstName = trimToNull(firstName);
+        String normalizedLastName = trimToNull(lastName);
+        String normalizedMobile = trimToNull(mobile);
+        if (normalizedFirstName == null || normalizedLastName == null || normalizedMobile == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "First name, last name, and mobile number are required for a walk-in nurse");
+        }
+        String normalizedEmail = trimToNull(email);
+        List<Employee> existingNurses = getNurseEmployments();
+        String normalizedMobileDigits = normalizedMobile.replaceAll("\\D", "");
+        if (normalizedMobileDigits.length() < 7 || normalizedMobileDigits.length() > 15) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Enter a valid nurse mobile number with 7 to 15 digits");
+        }
+        boolean duplicateMobile = existingNurses.stream().anyMatch(employee ->
+                StringUtils.hasText(employee.getMobile())
+                        && normalizedMobileDigits.equals(employee.getMobile().replaceAll("\\D", "")));
+        boolean duplicateEmail = normalizedEmail != null && existingNurses.stream().anyMatch(employee ->
+                normalizedEmail.equalsIgnoreCase(employee.getEmail()));
+        boolean duplicateLogin = userRepository.findAll().stream()
+                .filter(this::isNurse)
+                .anyMatch(account -> (normalizedEmail != null
+                                && normalizedEmail.equalsIgnoreCase(account.getEmailId()))
+                        || (StringUtils.hasText(account.getMobileNo())
+                                && normalizedMobileDigits.equals(account.getMobileNo().replaceAll("\\D", ""))));
+        if (duplicateMobile || duplicateEmail || duplicateLogin) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A nurse with this mobile number or email already exists. Select the existing nurse instead.");
+        }
+        String normalizedLicense = trimToNull(licenseNumber);
+        if (normalizedLicense != null && nurseProfileRepository.findAll().stream()
+                .anyMatch(existing -> StringUtils.hasText(existing.getLicenseNumber())
+                        && normalizedLicense.equalsIgnoreCase(existing.getLicenseNumber()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This nurse registration number is already in use");
+        }
+
+        Employee employee = new Employee();
+        employee.setFirstName(normalizedFirstName);
+        employee.setLastName(normalizedLastName);
+        employee.setMobile(normalizedMobile);
+        employee.setEmail(normalizedEmail);
+        employee.setEmployeeType("NURSE");
+        employee.setEmploymentType("TEMPORARY");
+        employee.setJoiningDate(LocalDate.now());
+        employee.setStatus("ACTIVE");
+        employee.setDepartmentName("Nursing");
+        employee.setEmployeeCode(generateWalkInNurseCode());
+        employee.setProfessionalInfo(Map.of(
+                "qualification", defaultValue(qualification, ""),
+                "registrationNumber", defaultValue(licenseNumber, ""),
+                "specialization", defaultValue(specialization, "GENERAL")));
+        Employee saved = mongoTemplate.save(employee);
+
+        NurseProfile profile = new NurseProfile();
+        profile.setEmployeeId(saved.getEmployeeCode());
+        profile.setName(saved.getFullName());
+        profile.setPhone(saved.getMobile());
+        profile.setEmail(saved.getEmail());
+        profile.setQualification(trimToNull(qualification));
+        profile.setLicenseNumber(normalizedLicense);
+        profile.setSpecialization(defaultValue(specialization, "GENERAL"));
+        profile.setDesignation("STAFF_NURSE");
+        profile.setStatus("ACTIVE");
+        nurseProfileRepository.save(profile);
+        return saved;
+    }
+
+    private String generateWalkInNurseCode() {
+        String code;
+        do {
+            code = com.example.MedcareApp.services.StaffIdentifierGenerator.generate("NR-WK");
+        } while (mongoTemplate.findOne(
+                Query.query(Criteria.where("employeeCode").is(code)), Employee.class) != null);
+        return code;
+    }
+
     public List<NurseProfile> getNurseProfilesForManager(String accountId) {
         Set<String> wardScope = managerWardScope(accountId);
         if (wardScope == null) return getNurseProfiles();
@@ -97,7 +187,8 @@ public class NursingService {
                 .collect(java.util.stream.Collectors.toSet());
         nurseIds.add(accountId);
         return getNurseProfiles().stream()
-                .filter(profile -> nurseIds.contains(profile.getAccountId()))
+                .filter(profile -> nurseIds.contains(profile.getAccountId())
+                        || nurseIds.contains(profile.getEmployeeId()))
                 .toList();
     }
 
@@ -715,9 +806,11 @@ public class NursingService {
     }
 
     public List<NurseShiftRoster> getNurseRosters(String accountId) {
+        NurseProfile nurse = getNurseProfile(accountId);
         getNurseAccount(accountId);
         LocalDate today = LocalDate.now();
-        return rosterRepository.findByNurseIdAndStatus(accountId, "SCHEDULED").stream()
+        return rosterRepository.findAll().stream()
+                .filter(roster -> "SCHEDULED".equals(roster.getStatus()) && matchesNurse(roster.getNurseId(), nurse))
                 .filter(roster -> !LocalDate.parse(roster.getEndDate()).isBefore(today))
                 .toList();
     }
@@ -736,12 +829,13 @@ public class NursingService {
         roster.setId(null);
         requireActorWardScope(actor, roster.getWardId());
         NurseProfile nurse = getNurseProfile(roster.getNurseId());
-        if (!"ACTIVE".equals(nurse.getStatus()) || !isActiveNurseAccount(nurse.getAccountId())) {
+        if (!isSchedulableNurse(nurse)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only active nurses can be scheduled");
         }
-        getNurseAccount(nurse.getAccountId());
         requireWard(roster.getWardId());
-        boolean overlap = rosterRepository.findByNurseIdAndStatus(nurse.getAccountId(), "SCHEDULED").stream()
+        boolean overlap = rosterRepository.findAll().stream()
+                .filter(existing -> "SCHEDULED".equals(existing.getStatus())
+                        && matchesNurse(existing.getNurseId(), nurse))
                 .filter(existing -> existing.getShift().equals(roster.getShift()))
                 .filter(existing -> roster.getId() == null || !existing.getId().equals(roster.getId()))
                 .anyMatch(existing -> !end.isBefore(LocalDate.parse(existing.getStartDate()))
@@ -750,7 +844,7 @@ public class NursingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This nurse already has a roster entry for an overlapping date and shift");
         }
-        roster.setNurseId(nurse.getAccountId());
+        roster.setNurseId(nurse.getEmployeeId());
         roster.setStartDate(start.toString());
         roster.setEndDate(end.toString());
         roster.setStatus("SCHEDULED");
@@ -766,8 +860,10 @@ public class NursingService {
                     .toList();
         }
         getNurseAccount(accountId);
+        NurseProfile nurse = getNurseProfile(accountId);
         return shiftSwapRepository.findAllByOrderByRequestedAtDesc().stream()
-                .filter(swap -> accountId.equals(swap.getFromNurseId()) || accountId.equals(swap.getToNurseId()))
+                .filter(swap -> matchesNurse(swap.getFromNurseId(), nurse)
+                        || matchesNurse(swap.getToNurseId(), nurse))
                 .toList();
     }
 
@@ -790,12 +886,17 @@ public class NursingService {
         Ward ward = requireWard(wardId);
         NurseProfile fromNurse = getNurseProfile(fromNurseId);
         NurseProfile toNurse = getNurseProfile(toNurseId);
+        if (matchesNurse(fromNurse.getEmployeeId(), toNurse)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose another nurse for the shift swap");
+        }
         requireOnDuty(fromNurse, ward, normalizedShift, shiftDate);
         requireOnDuty(toNurse, ward, normalizedShift, shiftDate);
+        String fromId = fromNurse.getEmployeeId();
+        String toId = toNurse.getEmployeeId();
         boolean duplicate = shiftSwapRepository.findAllByOrderByRequestedAtDesc().stream()
                 .anyMatch(existing -> "PENDING".equals(existing.getStatus())
-                        && fromNurseId.equals(existing.getFromNurseId())
-                        && toNurseId.equals(existing.getToNurseId())
+                        && fromId.equals(existing.getFromNurseId())
+                        && toId.equals(existing.getToNurseId())
                         && wardId.equals(existing.getWardId())
                         && normalizedShift.equals(existing.getShift())
                         && shiftDate.toString().equals(existing.getDate()));
@@ -804,13 +905,13 @@ public class NursingService {
                     "A pending shift swap already exists for this nurse, ward, shift, and date");
         }
         NurseShiftSwap swap = new NurseShiftSwap();
-        swap.setFromNurseId(fromNurseId);
-        swap.setToNurseId(toNurseId);
+        swap.setFromNurseId(fromId);
+        swap.setToNurseId(toId);
         swap.setWardId(wardId);
         swap.setShift(normalizedShift);
         swap.setDate(shiftDate.toString());
         swap.setNote(trimToNull(note));
-        swap.setRequestedBy(fromNurseId);
+        swap.setRequestedBy(fromId);
         return shiftSwapRepository.save(swap);
     }
 
@@ -825,8 +926,8 @@ public class NursingService {
             LocalDate date = parseDate(swap.getDate(), "Shift date");
             NurseShiftRoster first = requireRoster(swap.getFromNurseId(), swap.getWardId(), swap.getShift(), date);
             NurseShiftRoster second = requireRoster(swap.getToNurseId(), swap.getWardId(), swap.getShift(), date);
-            replaceRosterForDate(first, swap.getToNurseId(), date);
-            replaceRosterForDate(second, swap.getFromNurseId(), date);
+            replaceRosterForDate(first, getNurseProfile(swap.getToNurseId()).getEmployeeId(), date);
+            replaceRosterForDate(second, getNurseProfile(swap.getFromNurseId()).getEmployeeId(), date);
             swap.setStatus("APPROVED");
         } else {
             swap.setStatus("DECLINED");
@@ -838,7 +939,9 @@ public class NursingService {
     }
 
     private NurseShiftRoster requireRoster(String nurseId, String wardId, String shift, LocalDate date) {
-        return rosterRepository.findByNurseIdAndStatus(nurseId, "SCHEDULED").stream()
+        NurseProfile nurse = getNurseProfile(nurseId);
+        return rosterRepository.findAll().stream()
+                .filter(roster -> "SCHEDULED".equals(roster.getStatus()) && matchesNurse(roster.getNurseId(), nurse))
                 .filter(roster -> wardId.equals(roster.getWardId()) && shift.equals(roster.getShift()))
                 .filter(roster -> covers(roster, date))
                 .findFirst()
@@ -929,9 +1032,7 @@ public class NursingService {
                     .filter(roster -> covers(roster, LocalDate.now()))
                     .map(NurseShiftRoster::getNurseId)
                     .distinct()
-                    .filter(nurseAccountId -> nurseProfileRepository.findByAccountId(nurseAccountId)
-                            .filter(profile -> "ACTIVE".equals(profile.getStatus()))
-                            .filter(profile -> isActiveNurseAccount(profile.getAccountId())).isPresent())
+                    .filter(nurseId -> findNurseProfile(nurseId).filter(this::isSchedulableNurse).isPresent())
                     .toList();
             item.put("nursesOnDuty", nursesOnDuty.size());
             item.put("understaffed", nursesOnDuty.size() < ward.getMinimumNursesPerShift());
@@ -1041,13 +1142,13 @@ public class NursingService {
             assignmentRepository.findByPatientIdAndStatus(patientId, "ACTIVE").stream()
                     .filter(existing -> "PRIMARY".equals(existing.getRole()))
                     .forEach(this::closeAssignment);
-            patient.setPatientNurseId(nurse.getAccountId());
+            patient.setPatientNurseId(nurse.getEmployeeId());
             patient.setPatientNurseassign(nurse.getName());
             patientRepository.save(patient);
         }
         PatientAssignment assignment = new PatientAssignment();
         assignment.setPatientId(patientId);
-        assignment.setNurseId(nurse.getAccountId());
+        assignment.setNurseId(nurse.getEmployeeId());
         assignment.setWardId(ward.getId());
         assignment.setBedId(patient.getPatientBedId());
         assignment.setShift(normalizedShift);
@@ -1093,10 +1194,10 @@ public class NursingService {
         if ("PRIMARY".equals(normalizedRole)) {
             long newAssignments = selectedPatients.stream()
                     .filter(patient -> assignmentRepository.findByPatientIdAndStatus(patient.getPatientId(), "ACTIVE").stream()
-                            .noneMatch(existing -> nurseId.equals(existing.getNurseId())
+                            .noneMatch(existing -> matchesNurse(existing.getNurseId(), nurse)
                                     && "PRIMARY".equals(existing.getRole())))
                     .count();
-            if (workload(nurseId, wardId, "") + newAssignments > ward.getMaxPatientsPerNurse()) {
+            if (workload(nurse, wardId, "") + newAssignments > ward.getMaxPatientsPerNurse()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                         nurse.getName() + " would exceed the ward nurse-to-patient ratio");
             }
@@ -1147,8 +1248,9 @@ public class NursingService {
     }
 
     public List<Map<String, Object>> getNurseDashboard(String accountId) {
-        getNurseAccount(accountId);
-        return assignmentRepository.findByNurseIdAndStatus(accountId, "ACTIVE").stream()
+        NurseProfile nurse = getNurseProfile(accountId);
+        if (StringUtils.hasText(nurse.getAccountId())) getNurseAccount(nurse.getAccountId());
+        return assignmentsForNurse(nurse).stream()
                 .map(assignment -> {
                     Patient patient = findPatient(assignment.getPatientId());
                     Map<String, Object> row = new HashMap<>();
@@ -1188,7 +1290,7 @@ public class NursingService {
         }
         record.setId(null);
         record.setPatientId(patientId);
-        record.setNurseId(accountId);
+        record.setNurseId(getNurseProfile(accountId).getEmployeeId());
         record.setType(type);
         record.setStatus(Set.of("MEDICATION", "TASK").contains(type) ? "PENDING" : "RECORDED");
         record.setRecordedAt(Instant.now());
@@ -1202,7 +1304,7 @@ public class NursingService {
         if (!patientId.equals(record.getPatientId())) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Nursing task was not found for this patient");
         if (!"PENDING".equals(record.getStatus())) throw new ResponseStatusException(HttpStatus.CONFLICT, "This nursing task is already completed");
         record.setStatus("COMPLETED");
-        record.setNurseId(accountId);
+        record.setNurseId(getNurseProfile(accountId).getEmployeeId());
         record.setNote(update == null ? null : trimToNull(update.getNote()));
         record.setRecordedAt(Instant.now());
         return careRecordRepository.save(record);
@@ -1210,7 +1312,11 @@ public class NursingService {
 
     public List<NurseHandover> getPendingHandovers(String accountId) {
         getNurseAccount(accountId);
-        return handoverRepository.findByToNurseIdAndStatusOrderByCreatedAtDesc(accountId, "PENDING");
+        NurseProfile nurse = getNurseProfile(accountId);
+        return handoverRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(handover -> "PENDING".equals(handover.getStatus())
+                        && matchesNurse(handover.getToNurseId(), nurse))
+                .toList();
     }
 
     public NurseHandover createHandover(
@@ -1223,8 +1329,8 @@ public class NursingService {
         enforceWorkload(incoming, requireWard(current.getWardId()), patientId);
         NurseHandover handover = new NurseHandover();
         handover.setPatientId(patientId);
-        handover.setFromNurseId(accountId);
-        handover.setToNurseId(incoming.getAccountId());
+        handover.setFromNurseId(getNurseProfile(accountId).getEmployeeId());
+        handover.setToNurseId(incoming.getEmployeeId());
         handover.setShift(incomingShift);
         handover.setNote(note.trim());
         handover.setCreatedBy(accountId);
@@ -1232,23 +1338,25 @@ public class NursingService {
     }
 
     public NurseHandover acknowledgeHandover(String accountId, String handoverId) {
+        NurseProfile signedInNurse = getNurseProfile(accountId);
         NurseHandover handover = handoverRepository.findById(handoverId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Handover was not found"));
-        if (!accountId.equals(handover.getToNurseId())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This handover belongs to another nurse");
+        if (!matchesNurse(handover.getToNurseId(), signedInNurse)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This handover belongs to another nurse");
         if (!"PENDING".equals(handover.getStatus())) throw new ResponseStatusException(HttpStatus.CONFLICT, "This handover is no longer pending");
         Patient patient = findPatient(handover.getPatientId());
         String incomingShift = StringUtils.hasText(handover.getShift()) ? handover.getShift() : currentShift();
         requireOnDuty(getNurseProfile(accountId), requireWard(patient.getPatientWardId()), incomingShift, LocalDate.now());
         List<PatientAssignment> active = assignmentRepository.findByPatientIdAndStatus(patient.getPatientId(), "ACTIVE");
         PatientAssignment previous = active.stream()
-                .filter(assignment -> handover.getFromNurseId().equals(assignment.getNurseId())
+                .filter(assignment -> matchesNurse(assignment.getNurseId(),
+                        getNurseProfile(handover.getFromNurseId()))
                         && "PRIMARY".equals(assignment.getRole()))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Outgoing nurse assignment is no longer active"));
         closeAssignment(previous);
         PatientAssignment next = new PatientAssignment();
         next.setPatientId(patient.getPatientId());
-        next.setNurseId(accountId);
+        next.setNurseId(signedInNurse.getEmployeeId());
         next.setWardId(previous.getWardId());
         next.setBedId(previous.getBedId());
         next.setShift(incomingShift);
@@ -1256,9 +1364,8 @@ public class NursingService {
         next.setAssignedBy(accountId);
         next.setSource("HANDOVER");
         assignmentRepository.save(next);
-        NurseProfile incoming = getNurseProfile(accountId);
-        patient.setPatientNurseId(accountId);
-        patient.setPatientNurseassign(incoming.getName());
+        patient.setPatientNurseId(signedInNurse.getEmployeeId());
+        patient.setPatientNurseassign(signedInNurse.getName());
         patientRepository.save(patient);
         handover.setStatus("ACKNOWLEDGED");
         handover.setAcknowledgedAt(Instant.now());
@@ -1271,17 +1378,17 @@ public class NursingService {
         List<NurseProfile> eligible = rosterRepository.findByWardIdAndStatus(ward.getId(), "SCHEDULED").stream()
                 .filter(roster -> shift.equals(roster.getShift()))
                 .filter(roster -> covers(roster, LocalDate.now()))
-                .map(roster -> nurseProfileRepository.findByAccountId(roster.getNurseId()).orElse(null))
+                .map(roster -> findNurseProfile(roster.getNurseId()).orElse(null))
                 .filter(profile -> profile != null && "ACTIVE".equals(profile.getStatus()))
-                .filter(profile -> isActiveNurseAccount(profile.getAccountId()))
-                .filter(profile -> workload(profile.getAccountId(), ward.getId(), patient.getPatientId())
+                .filter(this::isSchedulableNurse)
+                .filter(profile -> workload(profile, ward.getId(), patient.getPatientId())
                         < ward.getMaxPatientsPerNurse())
                 .distinct()
-                .sorted(Comparator.comparingInt(profile -> workload(profile.getAccountId(), ward.getId(), patient.getPatientId())))
+                .sorted(Comparator.comparingInt(profile -> workload(profile, ward.getId(), patient.getPatientId())))
                 .toList();
         if (eligible.isEmpty()) return;
         NurseProfile selected = eligible.get(0);
-        assignPatient(patient.getPatientId(), selected.getAccountId(), "PRIMARY", shift, actor, "AUTO");
+        assignPatient(patient.getPatientId(), selected.getEmployeeId(), "PRIMARY", shift, actor, "AUTO");
     }
 
     private PatientAssignment assignPatient(
@@ -1296,7 +1403,7 @@ public class NursingService {
                 .forEach(this::closeAssignment);
         PatientAssignment assignment = new PatientAssignment();
         assignment.setPatientId(patientId);
-        assignment.setNurseId(nurse.getAccountId());
+        assignment.setNurseId(nurse.getEmployeeId());
         assignment.setWardId(ward.getId());
         assignment.setBedId(patient.getPatientBedId());
         assignment.setShift(shift);
@@ -1304,7 +1411,7 @@ public class NursingService {
         assignment.setAssignedBy(actor);
         assignment.setSource(source);
         if ("PRIMARY".equals(role)) {
-            patient.setPatientNurseId(nurse.getAccountId());
+            patient.setPatientNurseId(nurse.getEmployeeId());
             patient.setPatientNurseassign(nurse.getName());
             patientRepository.save(patient);
         }
@@ -1312,13 +1419,12 @@ public class NursingService {
     }
 
     private void requireOnDuty(NurseProfile nurse, Ward ward, String shift, LocalDate date) {
-        if (!"ACTIVE".equals(nurse.getStatus()) || !isActiveNurseAccount(nurse.getAccountId())) {
+        if (!isSchedulableNurse(nurse)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     nurse.getName() + " is not an active nurse and cannot receive an assignment");
         }
-        getNurseAccount(nurse.getAccountId());
         boolean onDuty = rosterRepository.findByWardIdAndStatus(ward.getId(), "SCHEDULED").stream()
-                .anyMatch(roster -> nurse.getAccountId().equals(roster.getNurseId())
+                .anyMatch(roster -> matchesNurse(roster.getNurseId(), nurse)
                         && shift.equals(roster.getShift())
                         && covers(roster, date));
         if (!onDuty) throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -1326,27 +1432,29 @@ public class NursingService {
     }
 
     private void enforceWorkload(NurseProfile nurse, Ward ward, String patientId) {
-        if (workload(nurse.getAccountId(), ward.getId(), patientId) >= ward.getMaxPatientsPerNurse()
+        if (workload(nurse, ward.getId(), patientId) >= ward.getMaxPatientsPerNurse()
                 && assignmentRepository.findByPatientIdAndStatus(patientId, "ACTIVE").stream()
-                .noneMatch(assignment -> nurse.getAccountId().equals(assignment.getNurseId()))) {
+                .noneMatch(assignment -> matchesNurse(assignment.getNurseId(), nurse))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     nurse.getName() + " has reached this ward’s nurse-to-patient limit (" + ward.getMaxPatientsPerNurse() + ")");
         }
     }
 
-    private int workload(String nurseId, String wardId, String patientId) {
-        return (int) assignmentRepository.findByNurseIdAndStatus(nurseId, "ACTIVE").stream()
+    private int workload(NurseProfile nurse, String wardId, String patientId) {
+        return assignmentsForNurse(nurse).stream()
                 .filter(assignment -> wardId.equals(assignment.getWardId()))
                 .filter(assignment -> "PRIMARY".equals(assignment.getRole()))
                 .map(PatientAssignment::getPatientId)
                 .filter(id -> !StringUtils.hasText(patientId) || !id.equals(patientId))
                 .distinct()
-                .count();
+                .mapToInt(ignored -> 1)
+                .sum();
     }
 
     private PatientAssignment requireActiveAssignment(String nurseId, String patientId) {
+        NurseProfile nurse = getNurseProfile(nurseId);
         return assignmentRepository.findByPatientIdAndStatus(patientId, "ACTIVE").stream()
-                .filter(assignment -> nurseId.equals(assignment.getNurseId()))
+                .filter(assignment -> matchesNurse(assignment.getNurseId(), nurse))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "This patient is not assigned to your nurse account"));
@@ -1359,8 +1467,8 @@ public class NursingService {
     }
 
     private void unassignUnavailableNurse(String nurseId, String actor) {
-        List<PatientAssignment> activeAssignments = assignmentRepository
-                .findByNurseIdAndStatus(nurseId, "ACTIVE");
+        NurseProfile nurse = getNurseProfile(nurseId);
+        List<PatientAssignment> activeAssignments = assignmentsForNurse(nurse);
         Set<String> primaryPatientIds = activeAssignments.stream()
                 .filter(assignment -> "PRIMARY".equals(assignment.getRole()))
                 .map(PatientAssignment::getPatientId)
@@ -1377,7 +1485,7 @@ public class NursingService {
                 patient.setPatientNurseassign(null);
             } else {
                 NurseProfile primary = getNurseProfile(remainingPrimary.get(0).getNurseId());
-                patient.setPatientNurseId(primary.getAccountId());
+                patient.setPatientNurseId(primary.getEmployeeId());
                 patient.setPatientNurseassign(primary.getName());
             }
             patientRepository.save(patient);
@@ -1388,8 +1496,40 @@ public class NursingService {
     }
 
     private NurseProfile getNurseProfile(String accountId) {
-        return nurseProfileRepository.findByAccountId(accountId)
+        return findNurseProfile(accountId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Nurse profile was not found"));
+    }
+
+    private java.util.Optional<NurseProfile> findNurseProfile(String nurseId) {
+        if (!StringUtils.hasText(nurseId)) return java.util.Optional.empty();
+        java.util.Optional<NurseProfile> profile = nurseProfileRepository.findByAccountId(nurseId);
+        if (profile.isPresent()) return profile;
+        return nurseProfileRepository.findByEmployeeId(nurseId);
+    }
+
+    private boolean isSchedulableNurse(NurseProfile profile) {
+        if (profile == null || !"ACTIVE".equals(profile.getStatus())) return false;
+        Employee employment = getNurseEmploymentByEmployeeCode(profile.getEmployeeId());
+        if (employment == null && StringUtils.hasText(profile.getAccountId())) {
+            user account = userRepository.findById(profile.getAccountId()).orElse(null);
+            employment = account == null ? null : getNurseEmploymentByEmail(account.getEmailId());
+        }
+        if (employment == null || !"ACTIVE".equalsIgnoreCase(employment.getStatus())
+                || !StringUtils.hasText(employment.getEmployeeCode())) return false;
+        if (!StringUtils.hasText(profile.getEmployeeId())) profile.setEmployeeId(employment.getEmployeeCode());
+        return !StringUtils.hasText(profile.getAccountId()) || isActiveNurseAccount(profile.getAccountId());
+    }
+
+    private boolean matchesNurse(String nurseId, NurseProfile profile) {
+        return StringUtils.hasText(nurseId) && profile != null
+                && (nurseId.equals(profile.getEmployeeId()) || nurseId.equals(profile.getAccountId()));
+    }
+
+    private List<PatientAssignment> assignmentsForNurse(NurseProfile profile) {
+        return assignmentRepository.findAll().stream()
+                .filter(assignment -> "ACTIVE".equals(assignment.getStatus()))
+                .filter(assignment -> matchesNurse(assignment.getNurseId(), profile))
+                .toList();
     }
 
     private user getNurseAccount(String accountId) {
@@ -1425,7 +1565,11 @@ public class NursingService {
         if (hasFullNursingAccess(account)) return null;
         if (!account.getRoles().contains("HEAD_NURSE")) return Set.of();
         LocalDate today = LocalDate.now();
-        return rosterRepository.findByNurseIdAndStatus(accountId, "SCHEDULED").stream()
+        NurseProfile profile = findNurseProfile(accountId).orElse(null);
+        return rosterRepository.findAll().stream()
+                .filter(roster -> "SCHEDULED".equals(roster.getStatus())
+                        && (profile == null ? accountId.equals(roster.getNurseId())
+                                : matchesNurse(roster.getNurseId(), profile)))
                 .filter(roster -> !LocalDate.parse(roster.getEndDate()).isBefore(today))
                 .map(NurseShiftRoster::getWardId)
                 .collect(java.util.stream.Collectors.toSet());
@@ -1467,14 +1611,17 @@ public class NursingService {
 
     private void requireProfileScope(String targetAccountId, String actor) {
         user account = findActor(actor);
-        if (Set.of("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN").stream()
+        if (Set.of("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE").stream()
                 .anyMatch(account.getRoles()::contains)) return;
         if (!account.getRoles().contains("HEAD_NURSE")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot manage nurse profiles");
         }
         if (targetAccountId.equals(account.getId())) return;
         Set<String> wardScope = managerWardScope(account.getId());
-        boolean targetWorksInWard = rosterRepository.findByNurseIdAndStatus(targetAccountId, "SCHEDULED").stream()
+        NurseProfile target = findNurseProfile(targetAccountId).orElse(null);
+        boolean targetWorksInWard = target != null && rosterRepository.findAll().stream()
+                .filter(roster -> "SCHEDULED".equals(roster.getStatus())
+                        && matchesNurse(roster.getNurseId(), target))
                 .anyMatch(roster -> wardScope.contains(roster.getWardId()));
         if (!targetWorksInWard) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,

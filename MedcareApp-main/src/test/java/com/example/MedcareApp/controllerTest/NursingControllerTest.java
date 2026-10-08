@@ -89,18 +89,19 @@ class NursingControllerTest {
         nurseEmployment.setEmployeeCode("NUR-12345678");
         nurseEmployment.setEmployeeType("NURSE");
         nurseEmployment.setStatus("ACTIVE");
+        nurseEmployment.setEmail("nurse@example.test");
 
         when(userRepository.findAllByEmailIdIgnoreCase("admin@example.test")).thenReturn(List.of(admin));
         when(userRepository.findAll()).thenReturn(List.of(employedNurse, unrelatedAccount));
         when(nursingService.getNurseProfiles()).thenReturn(List.of());
-        when(nursingService.getNurseEmploymentByEmail("nurse@example.test")).thenReturn(nurseEmployment);
-        when(nursingService.getNurseEmploymentByEmail("doctor@example.test")).thenReturn(null);
+        when(nursingService.getNurseEmployments()).thenReturn(List.of(nurseEmployment));
 
         List<java.util.Map<String, Object>> nurses = controller.getNurses(() -> "admin@example.test");
 
         assertEquals(1, nurses.size());
         assertEquals("NUR-12345678", nurses.get(0).get("employeeCode"));
-        assertEquals("nurse-1", nurses.get(0).get("id"));
+        assertEquals("NUR-12345678", nurses.get(0).get("id"));
+        assertEquals("nurse-1", nurses.get(0).get("accountId"));
     }
 
     @Test

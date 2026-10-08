@@ -179,6 +179,8 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/nursing/nurses").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
                                 "NURSE", "HEAD_NURSE")
+                        .requestMatchers(HttpMethod.POST, "/api/nursing/nurses/walk-in").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.GET, "/api/nursing/dashboard", "/api/nursing/handovers").hasAnyRole(
                                 "NURSE", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.GET, "/api/nursing/rosters/mine").hasAnyRole("NURSE", "HEAD_NURSE")
@@ -226,13 +228,13 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.POST, "/api/nursing/wards")
                                 .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/nursing/wards/*/beds", "/api/nursing/rosters")
-                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HEAD_NURSE")
+                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.PUT, "/api/nursing/wards/*/beds/*")
                                 .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.PUT, "/api/nursing/wards/**")
                                 .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/nursing/nurses/**")
-                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HEAD_NURSE")
+                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "HEAD_NURSE")
                         .requestMatchers(HttpMethod.GET, "/api/wards").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE",
                                 "HEAD_NURSE")

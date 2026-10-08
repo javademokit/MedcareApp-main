@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -62,47 +63,88 @@ public class NursingController {
         List<NurseProfile> visibleProfiles = headNurseOnly
                 ? nursingService.getNurseProfilesForManager(currentAccount.getId())
                 : nursingService.getNurseProfiles();
-        Map<String, NurseProfile> profiles = visibleProfiles.stream()
-                .collect(java.util.stream.Collectors.toMap(NurseProfile::getAccountId, profile -> profile));
-        return userRepository.findAll().stream()
+        Map<String, NurseProfile> profilesByEmployeeId = visibleProfiles.stream()
+                .filter(profile -> StringUtils.hasText(profile.getEmployeeId()))
+                .collect(java.util.stream.Collectors.toMap(
+                        NurseProfile::getEmployeeId, profile -> profile, (first, ignored) -> first));
+        Map<String, NurseProfile> profilesByAccountId = visibleProfiles.stream()
+                .filter(profile -> StringUtils.hasText(profile.getAccountId()))
+                .collect(java.util.stream.Collectors.toMap(
+                        NurseProfile::getAccountId, profile -> profile, (first, ignored) -> first));
+        List<user> nurseAccounts = userRepository.findAll().stream()
                 .filter(account -> account.isActive()
                         && (account.getRoles().contains("NURSE") || account.getRoles().contains("HEAD_NURSE")))
-                .filter(account -> !headNurseOnly || profiles.containsKey(account.getId()))
-                .map(account -> new NurseAccountEmployment(
-                        account, nursingService.getNurseEmploymentByEmail(account.getEmailId())))
-                .filter(entry -> entry.employment() != null)
+                .toList();
+        return nursingService.getNurseEmployments().stream()
+                .map(employment -> {
+                    user account = nurseAccounts.stream()
+                            .filter(candidate -> StringUtils.hasText(candidate.getEmployeeCode())
+                                    && candidate.getEmployeeCode().equalsIgnoreCase(employment.getEmployeeCode()))
+                            .findFirst()
+                            .orElseGet(() -> nurseAccounts.stream()
+                                    .filter(candidate -> StringUtils.hasText(candidate.getEmailId())
+                                            && StringUtils.hasText(employment.getEmail())
+                                            && candidate.getEmailId().equalsIgnoreCase(employment.getEmail()))
+                                    .findFirst().orElse(null));
+                    NurseProfile profile = profilesByEmployeeId.get(employment.getEmployeeCode());
+                    if (profile == null && account != null) profile = profilesByAccountId.get(account.getId());
+                    return new NurseAccountEmployment(account, employment, profile);
+                })
+                .filter(entry -> !headNurseOnly || (entry.profile() != null
+                        && (entry.profile().getAccountId() == null
+                                || profilesByAccountId.containsKey(entry.profile().getAccountId()))))
                 .sorted(Comparator.comparing(
-                        entry -> entry.account().getUserId(),
+                        entry -> entry.employment().getEmployeeCode(),
                         Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
                 .map(entry -> {
-                    user account = entry.account();
                     Employee employment = entry.employment();
-                    NurseProfile profile = profiles.get(account.getId());
+                    user account = entry.account();
+                    NurseProfile profile = entry.profile();
                     boolean employmentActive = employment != null
                             && "ACTIVE".equalsIgnoreCase(employment.getStatus())
                             && StringUtils.hasText(employment.getEmployeeCode());
                     String nurseName = employment != null && StringUtils.hasText(employment.getFullName())
                             ? employment.getFullName()
-                            : profile == null ? account.getUserId() : profile.getName();
-                    return Map.<String, Object>ofEntries(
-                            Map.entry("id", account.getId()),
-                            Map.entry("userId", account.getUserId() == null ? "" : account.getUserId()),
-                            Map.entry("emailId", account.getEmailId() == null ? "" : account.getEmailId()),
-                            Map.entry("mobileNo", employment != null && StringUtils.hasText(employment.getMobile())
-                                    ? employment.getMobile() : account.getMobileNo() == null ? "" : account.getMobileNo()),
-                            Map.entry("profile", profile == null || !mayViewFullProfiles ? Map.of() : profile),
-                            Map.entry("profileComplete", profile != null),
-                            Map.entry("status", profile == null ? "PROFILE_REQUIRED" : profile.getStatus()),
-                            Map.entry("name", nurseName == null ? "" : nurseName),
-                            Map.entry("employeeCode", employment == null || employment.getEmployeeCode() == null
-                                    ? "" : employment.getEmployeeCode()),
-                            Map.entry("employmentStatus", employment == null || employment.getStatus() == null
-                                    ? "NOT_LINKED" : employment.getStatus()),
-                            Map.entry("employmentActive", employmentActive));
+                            : profile == null ? employment.getEmployeeCode()
+                                    : StringUtils.hasText(profile.getName()) ? profile.getName()
+                                            : account == null ? employment.getEmployeeCode() : account.getUserId();
+                    Map<String, Object> nurse = new java.util.LinkedHashMap<>();
+                    nurse.put("id", employment.getEmployeeCode());
+                    nurse.put("accountId", account == null ? "" : account.getId());
+                    nurse.put("userId", account == null || account.getUserId() == null ? "" : account.getUserId());
+                    nurse.put("emailId", StringUtils.hasText(employment.getEmail())
+                            ? employment.getEmail() : account == null || account.getEmailId() == null
+                                    ? "" : account.getEmailId());
+                    nurse.put("mobileNo", StringUtils.hasText(employment.getMobile())
+                            ? employment.getMobile() : account == null ? "" : account.getMobileNo());
+                    nurse.put("profile", profile == null || !mayViewFullProfiles ? Map.of() : profile);
+                    nurse.put("profileComplete", profile != null);
+                    nurse.put("status", profile == null ? "PROFILE_REQUIRED" : profile.getStatus());
+                    nurse.put("name", nurseName == null ? "" : nurseName);
+                    nurse.put("employeeCode", employment.getEmployeeCode() == null ? "" : employment.getEmployeeCode());
+                    nurse.put("employmentStatus", employment.getStatus() == null ? "NOT_LINKED" : employment.getStatus());
+                    nurse.put("employmentActive", employmentActive);
+                    nurse.put("walkIn", employment.getEmployeeCode() != null
+                            && employment.getEmployeeCode().startsWith("NR-WK-"));
+                    return nurse;
                 }).toList();
     }
 
-    private record NurseAccountEmployment(user account, Employee employment) {}
+    private record NurseAccountEmployment(user account, Employee employment, NurseProfile profile) {}
+
+    @PostMapping("/nurses/walk-in")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Employee createWalkInNurse(@RequestBody WalkInNurseRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Walk-in nurse details are required");
+        }
+        return nursingService.createWalkInNurse(request.firstName(), request.lastName(), request.mobile(),
+                request.email(), request.qualification(), request.licenseNumber(), request.specialization());
+    }
+
+    public record WalkInNurseRequest(
+            String firstName, String lastName, String mobile, String email,
+            String qualification, String licenseNumber, String specialization) {}
 
     @PutMapping("/nurses/{accountId}/profile")
     public NurseProfile saveNurseProfile(

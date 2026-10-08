@@ -249,7 +249,7 @@ public class HrPayrollService {
         if (employee.getEmployeeCode() == null) {
             String employeeType = upper(employee.getEmployeeType());
             String prefix = "DOCTOR".equals(employeeType) ? "DT"
-                    : "NURSE".equals(employeeType) ? "NUR" : "EMP";
+                    : "NURSE".equals(employeeType) ? "NR" : "EMP";
             employee.setEmployeeCode(StaffIdentifierGenerator.generate(prefix));
         }
         employee.setEmployeeType(upper(employee.getEmployeeType()));

@@ -7,5 +7,6 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 
 public interface NurseProfileRepository extends MongoRepository<NurseProfile, String> {
     Optional<NurseProfile> findByAccountId(String accountId);
+    Optional<NurseProfile> findByEmployeeId(String employeeId);
     List<NurseProfile> findByStatus(String status);
 }

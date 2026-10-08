@@ -44,6 +44,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
@@ -118,7 +119,7 @@ class NursingServiceTest {
         when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
         when(mongoTemplate.findOne(any(), eq(Employee.class))).thenReturn(employment);
         when(rosterRepository.findByWardIdAndStatus("ward-1", "SCHEDULED")).thenReturn(List.of(roster));
-        when(assignmentRepository.findByNurseIdAndStatus("nurse-1", "ACTIVE")).thenReturn(List.of(existing));
+        when(assignmentRepository.findAll()).thenReturn(List.of(existing));
 
         ResponseStatusException error = assertThrows(ResponseStatusException.class,
                 () -> service.assignPatient("PT-100", "nurse-1", "PRIMARY", "MORNING", "crm@example.test"));
@@ -169,6 +170,93 @@ class NursingServiceTest {
     }
 
     @Test
+    void createsWalkInNurseAsOneEmploymentRecordAndLinksProfileToItsEmployeeId() {
+        when(mongoTemplate.find(any(Query.class), eq(Employee.class))).thenReturn(List.of());
+        when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(null);
+        when(mongoTemplate.save(any(Employee.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(nurseProfileRepository.findAll()).thenReturn(List.of());
+        when(nurseProfileRepository.save(any(NurseProfile.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Employee created = service.createWalkInNurse(
+                "Riya", "Shah", "+1 (555) 010-2020", null, "BSc Nursing", "RN-100", "ICU");
+
+        assertEquals("NURSE", created.getEmployeeType());
+        assertEquals("ACTIVE", created.getStatus());
+        assertTrue(created.getEmployeeCode().matches("NR-WK-[A-F0-9]{8}"));
+        ArgumentCaptor<NurseProfile> profileCaptor = ArgumentCaptor.forClass(NurseProfile.class);
+        verify(nurseProfileRepository).save(profileCaptor.capture());
+        assertEquals(created.getEmployeeCode(), profileCaptor.getValue().getEmployeeId());
+        assertEquals("Riya Shah", profileCaptor.getValue().getName());
+    }
+
+    @Test
+    void rejectsWalkInNurseWhenMobileAlreadyBelongsToAnExistingNurse() {
+        Employee existing = new Employee();
+        existing.setEmployeeType("NURSE");
+        existing.setMobile("15550102020");
+        when(mongoTemplate.find(any(Query.class), eq(Employee.class))).thenReturn(List.of(existing));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () ->
+                service.createWalkInNurse(
+                        "Riya", "Shah", "+1 (555) 010-2020", null, null, null, null));
+
+        assertEquals(409, error.getStatusCode().value());
+    }
+
+    @Test
+    void schedulesAndAssignsWalkInNurseUsingTheSameEmployeeId() {
+        String nurseId = "NR-WK-A1B2C3D4";
+        String today = LocalDate.now().toString();
+        NurseProfile profile = new NurseProfile();
+        profile.setEmployeeId(nurseId);
+        profile.setName("Riya Shah");
+        profile.setStatus("ACTIVE");
+        Employee employment = new Employee();
+        employment.setEmployeeType("NURSE");
+        employment.setEmployeeCode(nurseId);
+        employment.setStatus("ACTIVE");
+        user admin = new user();
+        admin.setId("admin-1");
+        admin.setRoles(Set.of("HOSPITAL_ADMIN"));
+        Ward ward = new Ward();
+        ward.setId("ward-1");
+        ward.setName("General");
+        ward.setMaxPatientsPerNurse(8);
+        Patient patient = new Patient();
+        patient.setPatientId("PT-100");
+        patient.setPatientAdmitdate(today);
+        patient.setPatientWardId("ward-1");
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        when(nurseProfileRepository.findByAccountId(nurseId)).thenReturn(Optional.empty());
+        when(nurseProfileRepository.findByEmployeeId(nurseId)).thenReturn(Optional.of(profile));
+        when(wardRepository.findById("ward-1")).thenReturn(Optional.of(ward));
+        when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(employment);
+        when(rosterRepository.findAll()).thenReturn(List.of());
+        when(rosterRepository.save(any(NurseShiftRoster.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        NurseShiftRoster roster = new NurseShiftRoster();
+        roster.setNurseId(nurseId);
+        roster.setWardId("ward-1");
+        roster.setShift("MORNING");
+        roster.setStartDate(today);
+        roster.setEndDate(today);
+        NurseShiftRoster savedRoster = service.saveRoster(roster, "admin-1");
+        when(rosterRepository.findByWardIdAndStatus("ward-1", "SCHEDULED")).thenReturn(List.of(savedRoster));
+        when(patientRepository.findAllByPatientId("PT-100")).thenReturn(List.of(patient));
+        when(assignmentRepository.findAll()).thenReturn(List.of());
+        when(assignmentRepository.findByPatientIdAndStatus("PT-100", "ACTIVE")).thenReturn(List.of());
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(assignmentRepository.save(any(PatientAssignment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        PatientAssignment assignment = service.assignPatient(
+                "PT-100", nurseId, "PRIMARY", "MORNING", "admin-1");
+
+        assertEquals(nurseId, savedRoster.getNurseId());
+        assertEquals(nurseId, assignment.getNurseId());
+        assertEquals(nurseId, patient.getPatientNurseId());
+    }
+
+    @Test
     void headNurseCanReadOnlyAssignmentsInRosteredWard() {
         String today = LocalDate.now().toString();
         user headNurse = new user();
@@ -187,7 +275,7 @@ class NursingServiceTest {
         otherWardAssignment.setWardId("ward-2");
 
         when(userRepository.findById("head-1")).thenReturn(Optional.of(headNurse));
-        when(rosterRepository.findByNurseIdAndStatus("head-1", "SCHEDULED")).thenReturn(List.of(roster));
+        when(rosterRepository.findAll()).thenReturn(List.of(roster));
         when(assignmentRepository.findAll()).thenReturn(List.of(wardAssignment, otherWardAssignment));
 
         List<PatientAssignment> result = service.getAssignments("head-1");

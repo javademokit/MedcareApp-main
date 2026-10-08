@@ -40,6 +40,8 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api")
 public class HrPayrollController {
     private static final String HR_ROLES = "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR')";
+    private static final String OVERTIME_REVIEW_ROLES =
+            "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','CRM_EXECUTIVE')";
     private static final String PAYROLL_ROLES = "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','FINANCE')";
     private static final String STAFF_ROLES = "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','FINANCE',"
             + "'DOCTOR','NURSE','HEAD_NURSE','RECEPTIONIST','CRM_EXECUTIVE','BILLING_EXECUTIVE','PHARMACIST','LAB_TECHNICIAN')";
@@ -240,7 +242,7 @@ public class HrPayrollController {
     }
 
     @GetMapping("/overtime-allowances")
-    @PreAuthorize(HR_ROLES)
+    @PreAuthorize(OVERTIME_REVIEW_ROLES)
     public List<Map<String, Object>> overtimeAllowanceRequests(@RequestParam String month) {
         return service.overtimeAllowanceRequests(month);
     }
@@ -266,7 +268,7 @@ public class HrPayrollController {
     }
 
     @PutMapping("/overtime-allowances/{id}/approve")
-    @PreAuthorize(HR_ROLES)
+    @PreAuthorize(OVERTIME_REVIEW_ROLES)
     public OvertimeAllowanceRequest approveOvertimeAllowance(
             @PathVariable String id, @RequestBody Map<String, String> request, Principal principal) {
         try {
@@ -279,7 +281,7 @@ public class HrPayrollController {
     }
 
     @PutMapping("/overtime-allowances/{id}/reject")
-    @PreAuthorize(HR_ROLES)
+    @PreAuthorize(OVERTIME_REVIEW_ROLES)
     public OvertimeAllowanceRequest rejectOvertimeAllowance(@PathVariable String id, Principal principal) {
         return service.decideOvertimeAllowance(id, "REJECT", null, principal.getName());
     }
