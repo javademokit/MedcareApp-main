@@ -8,6 +8,10 @@ public record DashboardSummary(
         int resultsAwaitingReview,
         int testsOrdered,
         int testsInProgress,
+        int totalBeds,
+        int availableBeds,
+        int occupiedBeds,
+        int totalNurses,
         List<ActivityPoint> dailyActivity,
         List<ActivityPoint> hourlyActivity,
         List<WardCount> wardData) {
@@ -20,5 +24,5 @@ public record DashboardSummary(
             int diagnostics,
             int admissions) {}
 
-    public record WardCount(String unit, int patients) {}
+    public record WardCount(String unit, int patients, int totalBeds, int availableBeds, int occupiedBeds) {}
 }

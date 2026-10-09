@@ -2,6 +2,8 @@ package com.example.MedcareApp.services;
 
 import com.example.MedcareApp.Entity.Appointment;
 import com.example.MedcareApp.Entity.emergency.EmergencyCase;
+import com.example.MedcareApp.Entity.nursing.Ward;
+import com.example.MedcareApp.Entity.nursing.WardBed;
 import com.example.MedcareApp.testModel.MedicalTest;
 import com.example.MedcareApp.web.DashboardSummary;
 import com.example.MedcareApp.web.DashboardSummary.ActivityPoint;
@@ -75,12 +77,40 @@ public class DashboardSummaryService {
 
         List<PatientAdmissionBucket> admissionBuckets = dataSource.findActivePatientAdmissionBuckets();
         int activeAdmissions = 0;
-        Map<String, Integer> wardCounts = new LinkedHashMap<>();
+        Map<String, WardInventory> wardCounts = new LinkedHashMap<>();
+        Map<String, String> wardNames = new LinkedHashMap<>();
+        for (Ward ward : dataSource.findWards()) {
+            String name = ward.getName() == null || ward.getName().isBlank() ? "Unnamed ward" : ward.getName();
+            wardCounts.put(ward.getId(), new WardInventory(name));
+            wardNames.put(ward.getId(), name);
+            wardNames.put(name.toLowerCase(Locale.ROOT), ward.getId());
+        }
+        int totalBeds = 0;
+        int availableBeds = 0;
+        int occupiedBeds = 0;
+        for (WardBed bed : dataSource.findWardBeds()) {
+            String wardId = bed.getWardId();
+            String wardName = wardNames.getOrDefault(wardId,
+                    wardId == null || wardId.isBlank() ? "Ward not assigned" : wardId);
+            WardInventory inventory = wardCounts.computeIfAbsent(wardId == null || wardId.isBlank()
+                    ? wardName : wardId, ignored -> new WardInventory(wardName));
+            inventory.totalBeds++;
+            totalBeds++;
+            if ("VACANT".equalsIgnoreCase(bed.getStatus())) {
+                inventory.availableBeds++;
+                availableBeds++;
+            } else if ("OCCUPIED".equalsIgnoreCase(bed.getStatus())) {
+                inventory.occupiedBeds++;
+                occupiedBeds++;
+            }
+        }
         for (PatientAdmissionBucket bucket : admissionBuckets) {
             activeAdmissions += bucket.count();
             String ward = bucket.ward() == null || bucket.ward().isBlank()
                     ? "Ward not assigned" : bucket.ward();
-            wardCounts.merge(ward, bucket.count(), Integer::sum);
+            String wardKey = wardNames.getOrDefault(ward, wardNames.getOrDefault(ward.toLowerCase(Locale.ROOT), ward));
+            WardInventory inventory = wardCounts.computeIfAbsent(wardKey, ignored -> new WardInventory(ward));
+            inventory.patients += bucket.count();
             int[] counts = daily.get(parseDate(bucket.admitDate()));
             if (counts != null) counts[3] += bucket.count();
         }
@@ -93,11 +123,25 @@ public class DashboardSummaryService {
             hourlyPoints.add(new ActivityPoint(today.toString(), String.format("%02d:00", hour),
                     hour, hourlyAppointments[hour], hourlyEmergencies[hour], 0, 0));
         }
-        List<WardCount> wardData = wardCounts.entrySet().stream()
-                .map(entry -> new WardCount(entry.getKey(), entry.getValue()))
+        List<WardCount> wardData = wardCounts.values().stream()
+                .map(inventory -> new WardCount(inventory.unit, inventory.patients, inventory.totalBeds,
+                        inventory.availableBeds, inventory.occupiedBeds))
                 .toList();
         return new DashboardSummary(activeAdmissions, openEmergencies, awaitingReview,
-                ordered, inProgress, dailyPoints, hourlyPoints, wardData);
+                ordered, inProgress, totalBeds, availableBeds, occupiedBeds, dataSource.countActiveNurses(),
+                dailyPoints, hourlyPoints, wardData);
+    }
+
+    private static final class WardInventory {
+        private final String unit;
+        private int patients;
+        private int totalBeds;
+        private int availableBeds;
+        private int occupiedBeds;
+
+        private WardInventory(String unit) {
+            this.unit = unit;
+        }
     }
 
     private LocalDate parseDate(String value) {

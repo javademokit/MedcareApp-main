@@ -2,6 +2,9 @@ package com.example.MedcareApp.services;
 
 import com.example.MedcareApp.Entity.Appointment;
 import com.example.MedcareApp.Entity.emergency.EmergencyCase;
+import com.example.MedcareApp.Entity.hrpayroll.Employee;
+import com.example.MedcareApp.Entity.nursing.Ward;
+import com.example.MedcareApp.Entity.nursing.WardBed;
 import com.example.MedcareApp.testModel.MedicalTest;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -75,5 +78,23 @@ public class MongoDashboardSummaryDataSource implements DashboardSummaryDataSour
         AggregationResults<PatientAdmissionBucket> results = mongoTemplate.aggregate(
                 aggregation, "patients", PatientAdmissionBucket.class);
         return results.getMappedResults();
+    }
+
+    @Override
+    public List<Ward> findWards() {
+        return mongoTemplate.findAll(Ward.class);
+    }
+
+    @Override
+    public List<WardBed> findWardBeds() {
+        Query query = new Query();
+        query.fields().include("wardId").include("status");
+        return mongoTemplate.find(query, WardBed.class);
+    }
+
+    @Override
+    public int countActiveNurses() {
+        return Math.toIntExact(mongoTemplate.count(Query.query(
+                Criteria.where("employeeType").is("NURSE").and("status").is("ACTIVE")), Employee.class));
     }
 }
