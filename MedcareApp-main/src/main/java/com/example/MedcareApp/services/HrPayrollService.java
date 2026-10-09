@@ -8,6 +8,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.hrpayroll.EmployeeType;
 import com.example.MedcareApp.Entity.hrpayroll.LeaveRequest;
 import com.example.MedcareApp.Entity.hrpayroll.OvertimeAllowanceRequest;
+import com.example.MedcareApp.Entity.hrpayroll.PayrollAuditLog;
 import com.example.MedcareApp.Entity.hrpayroll.PayrollRun;
 import com.example.MedcareApp.Entity.hrpayroll.Payslip;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryComponent;
@@ -15,12 +16,17 @@ import com.example.MedcareApp.Entity.hrpayroll.SalaryStructure;
 import com.example.MedcareApp.Entity.hrpayroll.Shift;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -35,6 +41,7 @@ import java.util.function.Function;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -638,9 +645,10 @@ public class HrPayrollService {
     }
 
     public List<PayrollRun> payrollRuns(String monthValue) {
-        if (monthValue == null || monthValue.isBlank()) return mongo.findAll(PayrollRun.class);
-        String month = parseMonth(monthValue).toString();
-        return mongo.find(Query.query(Criteria.where("month").is(month)), PayrollRun.class);
+        Query query = monthValue == null || monthValue.isBlank()
+                ? new Query()
+                : Query.query(Criteria.where("month").is(parseMonth(monthValue).toString()));
+        return mongo.find(query.with(Sort.by(Sort.Direction.DESC, "createdAt")), PayrollRun.class);
     }
 
     public PayrollRun payrollRun(String id) {
@@ -659,10 +667,17 @@ public class HrPayrollService {
         run.setMonth(month);
         run.setStatus("DRAFT");
         run.setCreatedBy(actor);
-        return mongo.save(run);
+        run.setInputSnapshot(Map.of("month", month, "runType", run.getRunType()));
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "CREATED", actor, null, Map.of("month", month, "version", saved.getVersion()));
+        return saved;
     }
 
     public PayrollRun calculatePayroll(String id) {
+        return calculatePayroll(id, "system");
+    }
+
+    public PayrollRun calculatePayroll(String id, String actor) {
         PayrollRun run = payrollRun(id);
         if (!"DRAFT".equals(run.getStatus())) throw conflict("Only draft payroll runs can be calculated");
         YearMonth month = parseMonth(run.getMonth());
@@ -695,37 +710,228 @@ public class HrPayrollService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Payroll cannot be calculated: " + String.join("; ", errors));
         }
+        PayrollRun previousRun = payrollForMonth(month.minusMonths(1).toString());
+        applyPayrollFlags(items, previousRun);
         run.setItems(items);
         run.setEmployeeCount(items.size());
         run.setTotalGross(sum(items, PayrollRun.PayrollItem::getGrossSalary));
         run.setTotalDeduction(sum(items, PayrollRun.PayrollItem::getTotalDeduction));
         run.setTotalNet(sum(items, PayrollRun.PayrollItem::getNetSalary));
         run.setStatus("CALCULATED");
-        return mongo.save(run);
+        run.setInputSnapshot(Map.of(
+                "month", run.getMonth(),
+                "runType", defaultValue(run.getRunType(), "REGULAR"),
+                "employeeCount", items.size(),
+                "employees", items.stream().map(item -> Map.of(
+                        "employeeId", item.getEmployeeId(),
+                        "paidDays", item.getPaidDays(),
+                        "unpaidDays", item.getUnpaidDays(),
+                        "gross", item.getGrossSalary(),
+                        "deductions", item.getTotalDeduction(),
+                        "net", item.getNetSalary(),
+                        "flags", List.copyOf(item.getFlags()))).toList(),
+                "calculatedAt", Instant.now().toString()));
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "CALCULATED", actor, null,
+                Map.of("employeeCount", items.size(), "gross", saved.getTotalGross(),
+                        "deductions", saved.getTotalDeduction(), "net", saved.getTotalNet()));
+        return saved;
+    }
+
+    public Map<String, Object> payrollPrechecks(String id) {
+        PayrollRun run = payrollRun(id);
+        YearMonth month = parseMonth(run.getMonth());
+        List<Map<String, Object>> warnings = new ArrayList<>();
+        List<Map<String, Object>> blockers = new ArrayList<>();
+        List<Employee> employees = payrollEligibleEmployees().stream()
+                .filter(employee -> employee.getJoiningDate() == null
+                        || !employee.getJoiningDate().isAfter(month.atEndOfMonth()))
+                .toList();
+        for (Employee employee : employees) {
+            Map<String, Object> detail = Map.of(
+                    "employeeId", employee.getId(),
+                    "employeeCode", defaultValue(employee.getEmployeeCode(), ""),
+                    "employeeName", employee.getFullName());
+            List<SalaryStructureTimeline.Segment> segments = SalaryStructureTimeline.segments(
+                    employee, salaryStructuresForMonth(employee.getId(), month), month);
+            if (segments.isEmpty()) {
+                Map<String, Object> issue = new LinkedHashMap<>(detail);
+                issue.put("message", "No active salary structure covers the full month " + month);
+                blockers.add(issue);
+            }
+            if (!hasText(employee.getPanNumber()) || !hasText(employee.getPfUanNumber())) {
+                Map<String, Object> issue = new LinkedHashMap<>(detail);
+                issue.put("message", "PAN or PF/UAN details are missing");
+                warnings.add(issue);
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("runId", run.getId());
+        result.put("month", run.getMonth());
+        result.put("eligibleEmployeeCount", employees.size());
+        result.put("blockers", blockers);
+        result.put("warnings", warnings);
+        result.put("ready", blockers.isEmpty() && !employees.isEmpty());
+        return result;
+    }
+
+    public PayrollRun setSalaryHold(
+            String id, String employeeId, boolean hold, String reason, String actor) {
+        PayrollRun run = payrollRun(id);
+        if (!"CALCULATED".equals(run.getStatus())) {
+            throw conflict("Salary holds can only be changed while the payroll run is calculated and under review");
+        }
+        PayrollRun.PayrollItem item = payrollItem(run, employeeId);
+        if (hold) requireText(reason, "A reason is required to put salary on hold");
+        item.setSalaryOnHold(hold);
+        item.setHoldReason(hold ? reason.trim() : null);
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, hold ? "SALARY_HOLD_SET" : "SALARY_HOLD_RELEASED", actor,
+                hold ? reason.trim() : null, Map.of("employeeId", employeeId));
+        return saved;
+    }
+
+    public PayrollRun addPayrollAdjustment(
+            String id, String employeeId, String type, String code, String name,
+            BigDecimal amount, String reason, String actor) {
+        PayrollRun run = payrollRun(id);
+        if (!"CALCULATED".equals(run.getStatus())) {
+            throw conflict("Payroll adjustments can only be made while the run is calculated and under review");
+        }
+        requireText(reason, "A reason is required for a payroll adjustment");
+        requireText(name, "Adjustment name is required");
+        String normalizedType = upper(type);
+        if (!Set.of("EARNING", "DEDUCTION").contains(normalizedType)) {
+            throw badRequest("Adjustment type must be EARNING or DEDUCTION");
+        }
+        BigDecimal normalizedAmount = nonNegative(amount);
+        if (normalizedAmount.signum() == 0) throw badRequest("Adjustment amount must be greater than zero");
+        PayrollRun.PayrollItem item = payrollItem(run, employeeId);
+        PayrollRun.ComponentAmount line = new PayrollRun.ComponentAmount();
+        line.setCode(defaultValue(upper(normalize(code)), "ONE_OFF_ADJUSTMENT"));
+        line.setName(name.trim());
+        line.setAmount(round(normalizedAmount));
+        if ("EARNING".equals(normalizedType)) {
+            item.getEarnings().add(line);
+            item.setGrossSalary(round(item.getGrossSalary().add(normalizedAmount)));
+            item.setNetSalary(round(item.getNetSalary().add(normalizedAmount)));
+        } else {
+            item.getDeductions().add(line);
+            item.setTotalDeduction(round(item.getTotalDeduction().add(normalizedAmount)));
+            item.setNetSalary(round(item.getNetSalary().subtract(normalizedAmount)));
+        }
+        item.getTrace().add(Map.of(
+                "componentCode", line.getCode(),
+                "componentName", line.getName(),
+                "type", normalizedType,
+                "source", "ONE_OFF_ADJUSTMENT",
+                "reason", reason.trim(),
+                "calculatedAmount", line.getAmount()));
+        updateRunTotals(run);
+        PayrollRun.PayrollAdjustment adjustment = new PayrollRun.PayrollAdjustment();
+        adjustment.setEmployeeId(employeeId);
+        adjustment.setType(normalizedType);
+        adjustment.setCode(line.getCode());
+        adjustment.setName(line.getName());
+        adjustment.setAmount(line.getAmount());
+        adjustment.setReason(reason.trim());
+        adjustment.setActor(defaultValue(normalize(actor), "system"));
+        if (run.getAdjustments() == null) run.setAdjustments(new ArrayList<>());
+        run.getAdjustments().add(adjustment);
+        if (run.getInputSnapshot() == null) run.setInputSnapshot(new LinkedHashMap<>());
+        run.getInputSnapshot().put("reviewAdjustments", run.getAdjustments().stream().map(value -> Map.of(
+                "employeeId", value.getEmployeeId(),
+                "type", value.getType(),
+                "code", value.getCode(),
+                "name", value.getName(),
+                "amount", value.getAmount(),
+                "reason", value.getReason(),
+                "actor", value.getActor())).toList());
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "ONE_OFF_ADJUSTMENT", actor, reason.trim(), Map.of(
+                "employeeId", employeeId,
+                "type", normalizedType,
+                "code", line.getCode(),
+                "amount", line.getAmount()));
+        return saved;
+    }
+
+    public PayrollRun reopenPayroll(String id, String reason, String actor) {
+        PayrollRun source = payrollRun(id);
+        requireText(reason, "A reason is required to reopen payroll");
+        if (!Set.of("PROCESSED", "PAID").contains(source.getStatus())) {
+            throw conflict("Only locked or paid payroll runs can be reopened");
+        }
+        PayrollRun reopened = new PayrollRun();
+        reopened.setMonth(source.getMonth());
+        reopened.setRunType(source.getRunType());
+        reopened.setVersion(source.getVersion() + 1);
+        reopened.setStatus("DRAFT");
+        reopened.setCreatedBy(actor);
+        reopened.setReopenedFrom(source.getId());
+        reopened.setReopenReason(reason.trim());
+        reopened.setInputSnapshot(Map.of(
+                "month", source.getMonth(),
+                "runType", source.getRunType(),
+                "version", source.getVersion() + 1,
+                "reopenedFrom", source.getId()));
+        PayrollRun saved = mongo.save(reopened);
+        auditPayroll(source, "REOPENED", actor, reason.trim(),
+                Map.of("newRunId", saved.getId(), "newVersion", saved.getVersion()));
+        auditPayroll(saved, "CREATED_FROM_REOPEN", actor, reason.trim(),
+                Map.of("sourceRunId", source.getId(), "version", saved.getVersion()));
+        return saved;
+    }
+
+    public List<PayrollAuditLog> payrollAudit(String id) {
+        payrollRun(id);
+        return mongo.find(Query.query(Criteria.where("entityId").is(id))
+                .with(Sort.by(Sort.Direction.ASC, "createdAt")), PayrollAuditLog.class);
+    }
+
+    public PayrollRun requestPayrollApproval(String id, String requester) {
+        PayrollRun run = payrollRun(id);
+        if (!"CALCULATED".equals(run.getStatus())) {
+            throw conflict("Only calculated payroll runs can be sent for approval");
+        }
+        run.setStatus("PENDING_APPROVAL");
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "SUBMITTED_FOR_APPROVAL", requester, null,
+                Map.of("previousStatus", "CALCULATED"));
+        return saved;
     }
 
     public PayrollRun approvePayroll(String id, String approver) {
         PayrollRun run = payrollRun(id);
-        if (!Set.of("CALCULATED", "PENDING_APPROVAL").contains(run.getStatus())) {
-            throw conflict("Only calculated payroll runs can be approved");
+        if (!"PENDING_APPROVAL".equals(run.getStatus())) {
+            throw conflict("Only payroll runs submitted for approval can be approved");
         }
+        if (hasText(run.getCreatedBy()) && run.getCreatedBy().equalsIgnoreCase(approver)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Payroll maker and approver must be different users");
+        }
+        String previousStatus = run.getStatus();
         run.setStatus("APPROVED");
         run.setApprovedBy(approver);
         run.setApprovedAt(Instant.now());
-        return mongo.save(run);
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "APPROVED", approver, null, Map.of("previousStatus", previousStatus));
+        return saved;
     }
 
-    public PayrollRun rejectPayroll(String id, String reason) {
+    public PayrollRun rejectPayroll(String id, String reason, String actor) {
         PayrollRun run = payrollRun(id);
         if (!Set.of("CALCULATED", "PENDING_APPROVAL").contains(run.getStatus())) {
             throw conflict("Only calculated payroll runs can be rejected");
         }
         run.setStatus("REJECTED");
         run.setRejectionReason(normalize(reason));
-        return mongo.save(run);
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "REJECTED", actor, run.getRejectionReason(), Map.of());
+        return saved;
     }
 
-    public PayrollRun resetRejectedPayroll(String id) {
+    public PayrollRun resetRejectedPayroll(String id, String actor) {
         PayrollRun run = payrollRun(id);
         if (!"REJECTED".equals(run.getStatus())) throw conflict("Only rejected payroll runs can return to draft");
         run.setStatus("DRAFT");
@@ -735,15 +941,18 @@ public class HrPayrollService {
         run.setTotalGross(zero());
         run.setTotalDeduction(zero());
         run.setTotalNet(zero());
-        return mongo.save(run);
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "RESET_TO_DRAFT", actor, null, Map.of());
+        return saved;
     }
 
-    public PayrollRun processPayroll(String id) {
+    public PayrollRun processPayroll(String id, String actor) {
         PayrollRun run = payrollRun(id);
         if (!"APPROVED".equals(run.getStatus())) throw conflict("Only approved payroll runs can be processed");
         List<Payslip> existing = mongo.find(Query.query(Criteria.where("payrollId").is(run.getId())), Payslip.class);
         if (!existing.isEmpty()) throw conflict("Payslips have already been generated for this payroll run");
         for (PayrollRun.PayrollItem item : run.getItems()) {
+            if (item.isSalaryOnHold()) continue;
             Employee employee = require(Employee.class, item.getEmployeeId(), "Employee");
             Payslip payslip = new Payslip();
             payslip.setPayrollId(run.getId());
@@ -756,9 +965,16 @@ public class HrPayrollService {
             payslip.setPanNumber(employee.getPanNumber());
             payslip.setAadhaarLastFour(employee.getAadhaarLastFour());
             payslip.setPfUanNumber(employee.getPfUanNumber());
+            payslip.setJoiningDate(employee.getJoiningDate());
             payslip.setDepartmentName(employeeDepartmentName(employee));
             payslip.setDesignationName(designationName(employee.getDesignationId()));
+            payslip.setWorkLocation(employee.getLocation());
             payslip.setMonth(run.getMonth());
+            payslip.setDaysInMonth(parseMonth(run.getMonth()).lengthOfMonth());
+            payslip.setPaidDays(item.getPaidDays());
+            payslip.setUnpaidDays(item.getUnpaidDays());
+            payslip.setWeeklyOffDays(item.getWeeklyOffDays());
+            payslip.setOvertimeHours(item.getOvertimeHours());
             payslip.setGrossSalary(item.getGrossSalary());
             payslip.setTotalDeduction(item.getTotalDeduction());
             payslip.setNetSalary(item.getNetSalary());
@@ -769,14 +985,28 @@ public class HrPayrollService {
         }
         run.setStatus("PROCESSED");
         run.setProcessedAt(Instant.now());
-        return mongo.save(run);
+        run.setLockedAt(run.getProcessedAt());
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "LOCKED", actor, null, Map.of("payslipCount",
+                run.getItems().stream().filter(item -> !item.isSalaryOnHold()).count()));
+        return saved;
     }
 
-    public PayrollRun markPayrollPaid(String id) {
+    public PayrollRun markPayrollPaid(String id, String actor) {
         PayrollRun run = payrollRun(id);
         if (!"PROCESSED".equals(run.getStatus())) throw conflict("Only processed payroll runs can be marked paid");
         run.setStatus("PAID");
-        return mongo.save(run);
+        Instant paidAt = Instant.now();
+        run.setPaidAt(paidAt);
+        List<Payslip> generatedPayslips = mongo.find(
+                Query.query(Criteria.where("payrollId").is(run.getId())), Payslip.class);
+        for (Payslip payslip : generatedPayslips) {
+            payslip.setPaidAt(paidAt);
+            mongo.save(payslip);
+        }
+        PayrollRun saved = mongo.save(run);
+        auditPayroll(saved, "PAID", actor, null, Map.of());
+        return saved;
     }
 
     public List<Payslip> payslips(String monthValue) {
@@ -811,26 +1041,16 @@ public class HrPayrollService {
     }
 
     public byte[] payslipPdf(Payslip payslip) {
-        List<String> lines = new ArrayList<>();
-        lines.add("EMPLOYEE: " + payslip.getEmployeeName() + "  (" + payslip.getEmployeeCode() + ")");
-        lines.add("PAN: " + defaultValue(payslip.getPanNumber(), "Not provided"));
-        lines.add("Aadhaar: " + (hasText(payslip.getAadhaarLastFour())
-                ? "XXXX XXXX " + payslip.getAadhaarLastFour() : "Not provided"));
-        lines.add("PF / UAN: " + defaultValue(payslip.getPfUanNumber(), "Not provided"));
-        lines.add("Designation: " + defaultValue(payslip.getDesignationName(), "—")
-                + "  Department: " + defaultValue(payslip.getDepartmentName(), "—"));
-        lines.add("Pay period: " + payslip.getMonth());
-        lines.add("");
-        lines.add("EARNINGS");
-        payslip.getEarnings().forEach(item -> lines.add(item.getName() + "    " + money(item.getAmount())));
-        lines.add("Gross salary    " + money(payslip.getGrossSalary()));
-        lines.add("");
-        lines.add("DEDUCTIONS");
-        payslip.getDeductions().forEach(item -> lines.add(item.getName() + "    " + money(item.getAmount())));
-        lines.add("Total deductions    " + money(payslip.getTotalDeduction()));
-        lines.add("");
-        lines.add("NET SALARY    " + money(payslip.getNetSalary()));
-        return createPdf(lines);
+        Instant paidAt = payslip.getPaidAt();
+        if (paidAt == null && mongo != null && hasText(payslip.getPayrollId())) {
+            List<PayrollAuditLog> paidEvents = mongo.find(
+                    Query.query(Criteria.where("entityId").is(payslip.getPayrollId())
+                                    .and("action").is("PAID"))
+                            .with(Sort.by(Sort.Direction.DESC, "createdAt")).limit(1),
+                    PayrollAuditLog.class);
+            if (!paidEvents.isEmpty()) paidAt = paidEvents.get(0).getCreatedAt();
+        }
+        return createPdf(List.of(payslipPdfPage(payslip, paidAt)));
     }
 
     public Map<String, Object> reports(String monthValue) {
@@ -886,6 +1106,7 @@ public class HrPayrollService {
         BigDecimal paidDays = zero();
         BigDecimal unpaidDays = zero();
         BigDecimal overtimeHours = zero();
+        BigDecimal weeklyOffDays = zero();
         int workingDays = 0;
         for (SalaryStructureTimeline.Segment segment : segments) {
             SalaryStructure structure = segment.structure();
@@ -906,6 +1127,15 @@ public class HrPayrollService {
                         calculated, monthlyGross, monthlyAttendance);
                 BigDecimal amount = PayrollCalculator.prorate(
                         monthlyAmount, monthlyAttendance.paidDays(), month.lengthOfMonth());
+                item.getTrace().add(Map.of(
+                        "componentCode", component.getCode(),
+                        "componentName", component.getName(),
+                        "type", "EARNING",
+                        "calculationType", component.getCalculationType(),
+                        "monthlyAmount", monthlyAmount,
+                        "paidDays", monthlyAttendance.paidDays(),
+                        "workingDaysInMonth", month.lengthOfMonth(),
+                        "calculatedAmount", round(amount)));
                 calculated.put(component.getCode(), monthlyAmount);
                 monthlyGross = monthlyGross.add(monthlyAmount);
                 gross = gross.add(amount);
@@ -918,6 +1148,15 @@ public class HrPayrollService {
                         calculated, monthlyGross, monthlyAttendance);
                 BigDecimal amount = PayrollCalculator.prorate(
                         monthlyAmount, monthlyAttendance.paidDays(), month.lengthOfMonth());
+                item.getTrace().add(Map.of(
+                        "componentCode", component.getCode(),
+                        "componentName", component.getName(),
+                        "type", "DEDUCTION",
+                        "calculationType", component.getCalculationType(),
+                        "monthlyAmount", monthlyAmount,
+                        "paidDays", monthlyAttendance.paidDays(),
+                        "workingDaysInMonth", month.lengthOfMonth(),
+                        "calculatedAmount", round(amount)));
                 totalDeductions = totalDeductions.add(amount);
                 mergeComponentAmount(deductions, component, amount);
             }
@@ -927,6 +1166,7 @@ public class HrPayrollService {
             unpaidDays = unpaidDays.add(BigDecimal.valueOf(monthlyAttendance.workingDays())
                     .subtract(monthlyAttendance.paidDays()));
             overtimeHours = overtimeHours.add(monthlyAttendance.overtimeHours());
+            weeklyOffDays = weeklyOffDays.add(monthlyAttendance.weeklyOffDays());
         }
 
         item.setGrossSalary(round(gross));
@@ -935,6 +1175,7 @@ public class HrPayrollService {
         item.setWorkingDays(workingDays);
         item.setPaidDays(paidDays);
         item.setUnpaidDays(unpaidDays);
+        item.setWeeklyOffDays(weeklyOffDays);
         item.setOvertimeHours(overtimeHours);
         item.setEarnings(new ArrayList<>(earnings.values()));
         item.setDeductions(new ArrayList<>(deductions.values()));
@@ -976,10 +1217,12 @@ public class HrPayrollService {
         List<Attendance> monthAttendance = mongo.find(attendanceQuery, Attendance.class);
         Map<LocalDate, BigDecimal> unpaid = new HashMap<>();
         BigDecimal overtime = zero();
+        BigDecimal weeklyOffDays = zero();
         for (Attendance record : monthAttendance) {
             if (record.getAttendanceDate() == null) continue;
             if ("ABSENT".equals(record.getStatus())) unpaid.put(record.getAttendanceDate(), BigDecimal.ONE);
             else if ("HALF_DAY".equals(record.getStatus())) unpaid.put(record.getAttendanceDate(), new BigDecimal("0.5"));
+            else if ("WEEK_OFF".equals(record.getStatus())) weeklyOffDays = weeklyOffDays.add(BigDecimal.ONE);
             overtime = overtime.add(nonNegative(record.getOvertimeHours()));
         }
 
@@ -995,7 +1238,8 @@ public class HrPayrollService {
         }
         BigDecimal unpaidDays = unpaid.values().stream().reduce(zero(), BigDecimal::add)
                 .min(BigDecimal.valueOf(workingDays));
-        return new MonthlyAttendance(workingDays, BigDecimal.valueOf(workingDays).subtract(unpaidDays), overtime);
+        return new MonthlyAttendance(
+                workingDays, BigDecimal.valueOf(workingDays).subtract(unpaidDays), overtime, weeklyOffDays);
     }
 
     private Map<String, BigDecimal> approvedOvertimeAllowances(String month) {
@@ -1017,6 +1261,12 @@ public class HrPayrollService {
         item.getEarnings().add(line);
         item.setGrossSalary(round(item.getGrossSalary().add(approvedAmount)));
         item.setNetSalary(round(item.getNetSalary().add(approvedAmount)));
+        item.getTrace().add(Map.of(
+                "componentCode", "OVERTIME_ALLOWANCE",
+                "componentName", "Approved overtime allowance",
+                "type", "EARNING",
+                "source", "APPROVED_OVERTIME",
+                "calculatedAmount", approvedAmount));
     }
 
     private Map<String, Object> overtimeAllowanceView(OvertimeAllowanceRequest request) {
@@ -1036,7 +1286,54 @@ public class HrPayrollService {
     }
 
     private PayrollRun payrollForMonth(String month) {
-        return mongo.findOne(Query.query(Criteria.where("month").is(month)), PayrollRun.class);
+        return mongo.findOne(Query.query(Criteria.where("month").is(month))
+                .with(Sort.by(Sort.Direction.DESC, "version")
+                        .and(Sort.by(Sort.Direction.DESC, "createdAt"))), PayrollRun.class);
+    }
+
+    private PayrollRun.PayrollItem payrollItem(PayrollRun run, String employeeId) {
+        if (!hasText(employeeId)) throw badRequest("Employee ID is required");
+        return run.getItems().stream()
+                .filter(item -> employeeId.equals(item.getEmployeeId()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Employee is not included in this payroll run"));
+    }
+
+    private void updateRunTotals(PayrollRun run) {
+        run.setEmployeeCount(run.getItems().size());
+        run.setTotalGross(sum(run.getItems(), PayrollRun.PayrollItem::getGrossSalary));
+        run.setTotalDeduction(sum(run.getItems(), PayrollRun.PayrollItem::getTotalDeduction));
+        run.setTotalNet(sum(run.getItems(), PayrollRun.PayrollItem::getNetSalary));
+    }
+
+    private void applyPayrollFlags(List<PayrollRun.PayrollItem> items, PayrollRun previousRun) {
+        Map<String, PayrollRun.PayrollItem> previousItems = new HashMap<>();
+        if (previousRun != null && previousRun.getItems() != null) {
+            previousRun.getItems().forEach(item -> previousItems.put(item.getEmployeeId(), item));
+        }
+        for (PayrollRun.PayrollItem item : items) {
+            if (item.getNetSalary().signum() < 0) item.getFlags().add("NEGATIVE_NET");
+            if (item.getGrossSalary().signum() == 0) item.getFlags().add("ZERO_SALARY");
+            PayrollRun.PayrollItem prior = previousItems.get(item.getEmployeeId());
+            if (prior != null && prior.getGrossSalary() != null && prior.getGrossSalary().signum() > 0) {
+                BigDecimal variance = item.getGrossSalary().subtract(prior.getGrossSalary()).abs()
+                        .divide(prior.getGrossSalary(), 8, RoundingMode.HALF_UP);
+                if (variance.compareTo(new BigDecimal("0.15")) > 0) item.getFlags().add("GROSS_VARIANCE_OVER_15_PERCENT");
+            }
+        }
+    }
+
+    private void auditPayroll(
+            PayrollRun run, String action, String actor, String reason, Map<String, Object> details) {
+        PayrollAuditLog event = new PayrollAuditLog();
+        event.setEntityId(run.getId());
+        event.setAction(action);
+        event.setActor(defaultValue(normalize(actor), "system"));
+        event.setReason(normalize(reason));
+        event.setDetails(new LinkedHashMap<>(details));
+        event.setCreatedAt(Instant.now());
+        mongo.save(event);
     }
 
     private List<Employee> payrollEligibleEmployees() {
@@ -1262,25 +1559,265 @@ public class HrPayrollService {
         return "\"" + safe.replace("\"", "\"\"") + "\"";
     }
 
-    private static byte[] createPdf(List<String> lines) {
+    private static String payslipPdfPage(Payslip payslip, Instant paidAt) {
+        PdfCanvas canvas = new PdfCanvas();
+        canvas.strokeRect(35, 35, 525, 772, DARK, 1.1f);
+        canvas.text("MEDCARE HOSPITAL", 297.5f, 786, 17, DARK, true, PdfCanvas.Align.CENTER);
+        canvas.text("Employer registration details not provided", 297.5f, 770, 8.5f, MUTED, false,
+                PdfCanvas.Align.CENTER);
+        String period = payslipMonthLabel(payslip.getMonth());
+        canvas.text("PAYSLIP FOR THE MONTH OF " + period, 297.5f, 750, 12, TEAL, true, PdfCanvas.Align.CENTER);
+        canvas.line(51, 740, 544, 740, 0.12, 0.17, 0.21, 0.8f);
+
+        String uan = maskIdentifier(payslip.getPfUanNumber());
+        payslipField(canvas, "Employee Code", payslip.getEmployeeCode(), 51, 727, 134, 150);
+        payslipField(canvas, "Date of Joining", payslip.getJoiningDate() == null
+                ? null : payslip.getJoiningDate().format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)),
+                303, 727, 389, 151);
+        payslipField(canvas, "Employee Name", payslip.getEmployeeName(), 51, 709, 134, 150);
+        payslipField(canvas, "Designation", payslip.getDesignationName(), 303, 709, 389, 151);
+        payslipField(canvas, "Department", payslip.getDepartmentName(), 51, 691, 134, 150);
+        payslipField(canvas, "Work Location", payslip.getWorkLocation(), 303, 691, 389, 151);
+        payslipField(canvas, "PAN", payslip.getPanNumber(), 51, 673, 134, 150);
+        payslipField(canvas, "UAN", uan, 303, 673, 389, 151);
+        payslipField(canvas, "PF A/C No.", null, 51, 655, 134, 150);
+        payslipField(canvas, "ESIC IP No.", null, 303, 655, 389, 151);
+        payslipField(canvas, "Bank A/C No.", null, 51, 637, 134, 150);
+        payslipField(canvas, "IFSC", null, 303, 637, 389, 151);
+
+        float stripX = 51;
+        float stripY = 604;
+        float stripWidth = 493;
+        canvas.fillRect(stripX, stripY, stripWidth, 26, PALE);
+        String[] metricLabels = {"Days in month", "Paid days", "LOP days", "Weekly offs", "OT hours"};
+        String[] metricValues = {
+                payslip.getDaysInMonth() > 0 ? Integer.toString(payslip.getDaysInMonth()) : "Not recorded",
+                decimalValue(payslip.getPaidDays(), payslip.getDaysInMonth() > 0),
+                decimalValue(payslip.getUnpaidDays(), payslip.getDaysInMonth() > 0),
+                decimalValue(payslip.getWeeklyOffDays(), payslip.getDaysInMonth() > 0),
+                decimalValue(payslip.getOvertimeHours(), payslip.getDaysInMonth() > 0)
+        };
+        float metricWidth = stripWidth / metricLabels.length;
+        for (int index = 0; index < metricLabels.length; index++) {
+            float center = stripX + metricWidth * (index + 0.5f);
+            canvas.text(metricLabels[index], center, stripY + 15, 7.5f, MUTED, false, PdfCanvas.Align.CENTER);
+            canvas.text(metricValues[index], center, stripY + 4, 9.5f, DARK, true, PdfCanvas.Align.CENTER);
+        }
+
+        List<PayrollRun.ComponentAmount> earnings = safeComponents(payslip.getEarnings());
+        List<PayrollRun.ComponentAmount> deductions = safeComponents(payslip.getDeductions());
+        int rows = Math.max(7, Math.max(earnings.size(), deductions.size()));
+        float rowHeight = Math.min(18, 162f / (rows + 1));
+        float tableX = 51;
+        float tableWidth = 493;
+        float headerY = 576;
+        canvas.fillRect(tableX, headerY, tableWidth, 23, TEAL);
+        canvas.text("EARNINGS", tableX + 8, headerY + 7, 9.5f, WHITE, true, PdfCanvas.Align.LEFT);
+        payslipAmountHeader(canvas, tableX + 244, headerY + 7);
+        canvas.text("DEDUCTIONS", tableX + 264, headerY + 7, 9.5f, WHITE, true, PdfCanvas.Align.LEFT);
+        payslipAmountHeader(canvas, tableX + tableWidth - 8, headerY + 7);
+        float dividerX = tableX + 253;
+        canvas.line(dividerX, headerY - 5, dividerX, headerY - (rows + 1) * rowHeight, 0.76, 0.84, 0.83, 0.8f);
+        for (int index = 0; index < rows; index++) {
+            float rowBottom = headerY - (index + 1) * rowHeight;
+            if (index % 2 == 1) canvas.fillRect(tableX, rowBottom, tableWidth, rowHeight, 0.96, 0.97, 0.97);
+            drawComponent(canvas, index < earnings.size() ? earnings.get(index) : null,
+                    tableX + 8, tableX + 244, rowBottom + rowHeight / 2 - 3, rowHeight);
+            drawComponent(canvas, index < deductions.size() ? deductions.get(index) : null,
+                    tableX + 264, tableX + tableWidth - 8, rowBottom + rowHeight / 2 - 3, rowHeight);
+        }
+        float totalsY = headerY - (rows + 1) * rowHeight;
+        canvas.fillRect(tableX, totalsY, tableWidth, rowHeight, PALE);
+        canvas.text("GROSS EARNINGS", tableX + 8, totalsY + rowHeight / 2 - 3, 9.5f, DARK, true, PdfCanvas.Align.LEFT);
+        canvas.text(formatMoney(payslip.getGrossSalary()), tableX + 244, totalsY + rowHeight / 2 - 3,
+                9.5f, DARK, true, PdfCanvas.Align.RIGHT);
+        canvas.text("TOTAL DEDUCTIONS", tableX + 264, totalsY + rowHeight / 2 - 3,
+                9.5f, DARK, true, PdfCanvas.Align.LEFT);
+        canvas.text(formatMoney(payslip.getTotalDeduction()), tableX + tableWidth - 8,
+                totalsY + rowHeight / 2 - 3, 9.5f, DARK, true, PdfCanvas.Align.RIGHT);
+
+        canvas.fillRect(51, 354, 493, 51, PALE_TEAL);
+        canvas.strokeRect(51, 354, 493, 51, TEAL, 0.9f);
+        canvas.text("NET PAY", 65, 384, 8.5f, MUTED, false, PdfCanvas.Align.LEFT);
+        canvas.rupeeSymbol(65, 365, 0.7f, TEAL);
+        canvas.text(formatMoney(payslip.getNetSalary()), 78, 365, 19, TEAL, true, PdfCanvas.Align.LEFT);
+        canvas.text("In words", 530, 384, 8.5f, MUTED, false, PdfCanvas.Align.RIGHT);
+        canvas.text(amountInWords(payslip.getNetSalary()), 530, 367, 8.2f, DARK, true, PdfCanvas.Align.RIGHT, 290);
+
+        canvas.text("EMPLOYER CONTRIBUTIONS", 51, 333, 8.5f, TEAL, true, PdfCanvas.Align.LEFT);
+        canvas.text("Not available from saved payroll data.", 51, 319, 9, DARK, false, PdfCanvas.Align.LEFT);
+        canvas.text("LEAVE BALANCE", 51, 293, 8.5f, TEAL, true, PdfCanvas.Align.LEFT);
+        canvas.text("YEAR-TO-DATE (APR " + payrollYear(payslip.getMonth())
+                + " - " + payslipShortMonthLabel(payslip.getMonth()) + ")", 303, 293, 8.5f, TEAL, true,
+                PdfCanvas.Align.LEFT, 241);
+        canvas.text("Not available from saved leave-balance data.", 51, 278, 8.5f, DARK, false,
+                PdfCanvas.Align.LEFT, 241);
+        canvas.text("Not available from saved payroll data.", 303, 278, 8.5f, DARK, false,
+                PdfCanvas.Align.LEFT, 241);
+        canvas.text("Not available from saved payroll data.", 303, 263, 8.5f, DARK, false,
+                PdfCanvas.Align.LEFT, 241);
+        canvas.line(51, 237, 544, 237, 0.76, 0.84, 0.83, 0.8f);
+        canvas.text("Payment mode: Not provided", 51, 221, 8.5f, MUTED, false, PdfCanvas.Align.LEFT);
+        String paid = paidAt == null ? "Not recorded"
+                : DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)
+                        .withZone(ZoneId.systemDefault()).format(paidAt);
+        canvas.text("Paid on: " + paid, 544, 221, 8.5f, MUTED, false, PdfCanvas.Align.RIGHT);
+        canvas.text("This is a computer-generated payslip and does not require a signature.",
+                297.5f, 49, 8, MUTED, false, PdfCanvas.Align.CENTER);
+        return canvas.content();
+    }
+
+    private static void payslipField(
+            PdfCanvas canvas, String label, String value, float x, float y, float valueX, float maxValueWidth) {
+        canvas.text(label, x, y, 8.5f, MUTED, false, PdfCanvas.Align.LEFT);
+        canvas.text(": " + defaultValue(value, "Not provided"), valueX, y, 9, DARK, true,
+                PdfCanvas.Align.LEFT, maxValueWidth);
+    }
+
+    private static void payslipAmountHeader(PdfCanvas canvas, float right, float y) {
+        canvas.text("AMOUNT (", right - 23, y, 8.5f, WHITE, true, PdfCanvas.Align.RIGHT);
+        canvas.rupeeSymbol(right - 20, y - 1, 0.28f, WHITE);
+        canvas.text(")", right - 11, y, 8.5f, WHITE, true, PdfCanvas.Align.LEFT);
+    }
+
+    private static void drawComponent(
+            PdfCanvas canvas, PayrollRun.ComponentAmount component, float x, float right, float y, float rowHeight) {
+        if (component == null) return;
+        float fontSize = Math.min(9.5f, Math.max(6, rowHeight * 0.53f));
+        canvas.text(defaultValue(component.getName(), "Not provided"), x, y, fontSize, DARK, false,
+                PdfCanvas.Align.LEFT, right - x - 72);
+        canvas.text(formatMoney(component.getAmount()), right, y, fontSize, DARK, false, PdfCanvas.Align.RIGHT);
+    }
+
+    private static List<PayrollRun.ComponentAmount> safeComponents(List<PayrollRun.ComponentAmount> components) {
+        return components == null ? List.of() : components;
+    }
+
+    private static String decimalValue(BigDecimal value, boolean available) {
+        return available ? formatMoney(value).replace(".00", "") : "Not recorded";
+    }
+
+    private static String payslipMonthLabel(String month) {
         try {
-            StringBuilder text = new StringBuilder("q 0.05 0.42 0.35 rg 52 790 28 28 re f Q\n")
-                    .append("q 1 1 1 rg 62 794 8 20 re f 56 800 20 8 re f Q\n")
-                    .append("BT /F1 15 Tf 88 803 Td (MEDCARE) Tj ET\n")
-                    .append("BT /F1 9 Tf 88 790 Td (MONTHLY SALARY SLIP) Tj ET\n")
-                    .append("BT /F1 11 Tf 52 766 Td 15 TL\n");
-            for (String line : lines) {
-                String safe = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)");
-                text.append('(').append(safe).append(") Tj T*\n");
+            return YearMonth.parse(month).format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH))
+                    .toUpperCase(Locale.ROOT);
+        } catch (RuntimeException exception) {
+            return defaultValue(month, "NOT PROVIDED").toUpperCase(Locale.ROOT);
+        }
+    }
+
+    private static String payrollYear(String month) {
+        try {
+            return YearMonth.parse(month).format(DateTimeFormatter.ofPattern("yyyy", Locale.ENGLISH));
+        } catch (RuntimeException exception) {
+            return "NOT PROVIDED";
+        }
+    }
+
+    private static String payslipShortMonthLabel(String month) {
+        try {
+            return YearMonth.parse(month).format(DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH))
+                    .toUpperCase(Locale.ROOT);
+        } catch (RuntimeException exception) {
+            return defaultValue(month, "NOT PROVIDED").toUpperCase(Locale.ROOT);
+        }
+    }
+
+    private static String maskIdentifier(String value) {
+        if (!hasText(value)) return "Not provided";
+        String normalized = value.trim();
+        return "XXXXXXXX" + normalized.substring(Math.max(0, normalized.length() - 4));
+    }
+
+    private static String formatMoney(BigDecimal amount) {
+        DecimalFormat formatter = new DecimalFormat("#,##,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
+        formatter.setRoundingMode(RoundingMode.HALF_UP);
+        return formatter.format(amount == null ? zero() : amount);
+    }
+
+    private static String amountInWords(BigDecimal amount) {
+        BigDecimal rounded = (amount == null ? zero() : amount).setScale(2, RoundingMode.HALF_UP);
+        BigInteger rupees = rounded.abs().toBigInteger();
+        int paise = rounded.abs().remainder(BigDecimal.ONE).movePointRight(2).intValue();
+        String words = indianNumberWords(rupees);
+        if (rounded.signum() < 0) words = "Minus " + words;
+        return "Rupees " + words + (paise == 0 ? " Only"
+                : " and " + indianNumberWords(BigInteger.valueOf(paise)) + " Paise Only");
+    }
+
+    private static String indianNumberWords(BigInteger value) {
+        if (value.signum() == 0) return "Zero";
+        String[] units = {"", "Thousand", "Lakh", "Crore", "Arab", "Kharab"};
+        BigInteger thousand = BigInteger.valueOf(1000);
+        BigInteger hundred = BigInteger.valueOf(100);
+        List<String> groups = new ArrayList<>();
+        BigInteger remaining = value;
+        groups.add(wordsBelowThousand(remaining.mod(thousand).intValue()));
+        remaining = remaining.divide(thousand);
+        int group = 1;
+        while (remaining.signum() > 0) {
+            int part = remaining.mod(BigInteger.valueOf(100)).intValue();
+            if (part > 0) groups.add(wordsBelowThousand(part) + " "
+                    + (group < units.length ? units[group] : "Crore"));
+            remaining = remaining.divide(BigInteger.valueOf(100));
+            group++;
+        }
+        List<String> words = new ArrayList<>();
+        for (int index = groups.size() - 1; index >= 0; index--) {
+            if (!groups.get(index).isBlank()) words.add(groups.get(index));
+        }
+        return String.join(" ", words);
+    }
+
+    private static String wordsBelowThousand(int value) {
+        String[] ones = {"Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+                "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
+                "Eighteen", "Nineteen"};
+        String[] tens = {"", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"};
+        List<String> words = new ArrayList<>();
+        if (value >= 100) {
+            words.add(ones[value / 100]);
+            words.add("Hundred");
+            value %= 100;
+        }
+        if (value >= 20) {
+            words.add(tens[value / 10]);
+            value %= 10;
+        }
+        if (value > 0) words.add(ones[value]);
+        return String.join(" ", words);
+    }
+
+    private static final double[] DARK = {0.10, 0.14, 0.18};
+    private static final double[] TEAL = {0.05, 0.48, 0.44};
+    private static final double[] PALE = {0.93, 0.96, 0.95};
+    private static final double[] PALE_TEAL = {0.90, 0.96, 0.95};
+    private static final double[] MUTED = {0.36, 0.42, 0.43};
+    private static final double[] WHITE = {1, 1, 1};
+
+    private static byte[] createPdf(List<String> pages) {
+        try {
+            List<byte[]> objects = new ArrayList<>();
+            objects.add("<< /Type /Catalog /Pages 2 0 R >>".getBytes(StandardCharsets.US_ASCII));
+            StringBuilder kids = new StringBuilder();
+            for (int index = 0; index < pages.size(); index++) {
+                int pageId = 5 + index * 2;
+                kids.append(pageId).append(" 0 R ");
             }
-            text.append("ET");
-            byte[] stream = text.toString().getBytes(StandardCharsets.US_ASCII);
-            List<byte[]> objects = List.of(
-                    "<< /Type /Catalog /Pages 2 0 R >>".getBytes(StandardCharsets.US_ASCII),
-                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".getBytes(StandardCharsets.US_ASCII),
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".getBytes(StandardCharsets.US_ASCII),
-                    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".getBytes(StandardCharsets.US_ASCII),
-                    ("<< /Length " + stream.length + " >>\nstream\n" + text + "\nendstream").getBytes(StandardCharsets.US_ASCII));
+            objects.add(("<< /Type /Pages /Kids [" + kids + "] /Count " + pages.size() + " >>")
+                    .getBytes(StandardCharsets.US_ASCII));
+            objects.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".getBytes(StandardCharsets.US_ASCII));
+            objects.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".getBytes(StandardCharsets.US_ASCII));
+            for (int index = 0; index < pages.size(); index++) {
+                int pageId = 5 + index * 2;
+                int streamId = pageId + 1;
+                objects.add(("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+                        + "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents "
+                        + streamId + " 0 R >>").getBytes(StandardCharsets.US_ASCII));
+                byte[] stream = pages.get(index).getBytes(StandardCharsets.US_ASCII);
+                objects.add(("<< /Length " + stream.length + " >>\nstream\n"
+                        + pages.get(index) + "\nendstream").getBytes(StandardCharsets.US_ASCII));
+            }
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             output.write("%PDF-1.4\n".getBytes(StandardCharsets.US_ASCII));
             List<Integer> offsets = new ArrayList<>();
@@ -1291,14 +1828,106 @@ public class HrPayrollService {
                 output.write("\nendobj\n".getBytes(StandardCharsets.US_ASCII));
             }
             int xref = output.size();
-            output.write(("xref\n0 " + (objects.size() + 1) + "\n0000000000 65535 f \n").getBytes(StandardCharsets.US_ASCII));
-            for (int offset : offsets) output.write(String.format(Locale.ROOT, "%010d 00000 n \n", offset).getBytes(StandardCharsets.US_ASCII));
+            output.write(("xref\n0 " + (objects.size() + 1) + "\n0000000000 65535 f \n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            for (int offset : offsets) {
+                output.write(String.format(Locale.ROOT, "%010d 00000 n \n", offset).getBytes(StandardCharsets.US_ASCII));
+            }
             output.write(("trailer\n<< /Size " + (objects.size() + 1) + " /Root 1 0 R >>\nstartxref\n"
                     + xref + "\n%%EOF").getBytes(StandardCharsets.US_ASCII));
             return output.toByteArray();
         } catch (java.io.IOException exception) {
             throw new IllegalStateException("Could not generate payslip PDF", exception);
         }
+    }
+
+    private static final class PdfCanvas {
+        private final StringBuilder commands = new StringBuilder();
+
+        private enum Align { LEFT, RIGHT, CENTER }
+
+        private void fillRect(float x, float y, float width, float height, double[] color) {
+            fillRect(x, y, width, height, color[0], color[1], color[2]);
+        }
+
+        private void fillRect(float x, float y, float width, float height,
+                double red, double green, double blue) {
+            commands.append(String.format(Locale.ROOT, "%.3f %.3f %.3f rg %.2f %.2f %.2f %.2f re f%n",
+                    red, green, blue, x, y, width, height));
+        }
+
+        private void strokeRect(
+                float x, float y, float width, float height, double[] color, float lineWidth) {
+            commands.append(String.format(Locale.ROOT,
+                    "%.3f %.3f %.3f RG %.2f w %.2f %.2f %.2f %.2f re S%n",
+                    color[0], color[1], color[2], lineWidth, x, y, width, height));
+        }
+
+        private void line(float x1, float y1, float x2, float y2,
+                double red, double green, double blue, float width) {
+            commands.append(String.format(Locale.ROOT,
+                    "%.3f %.3f %.3f RG %.2f w %.2f %.2f m %.2f %.2f l S%n",
+                    red, green, blue, width, x1, y1, x2, y2));
+        }
+
+        private void rupeeSymbol(float x, float y, float scale, double[] color) {
+            commands.append(String.format(Locale.ROOT,
+                    "q 1 J 1 j %.3f %.3f %.3f RG %.2f w%n",
+                    color[0], color[1], color[2], 1.15f * scale));
+            commands.append(String.format(Locale.ROOT,
+                    "%.2f %.2f m %.2f %.2f l "
+                            + "%.2f %.2f m %.2f %.2f l "
+                            + "%.2f %.2f m %.2f %.2f l "
+                            + "%.2f %.2f m %.2f %.2f l "
+                            + "%.2f %.2f %.2f %.2f %.2f %.2f c "
+                            + "%.2f %.2f %.2f %.2f %.2f %.2f c%n",
+                    x, y + 16 * scale, x + 14 * scale, y + 16 * scale,
+                    x, y + 10 * scale, x + 11 * scale, y + 10 * scale,
+                    x + 5 * scale, y + 16 * scale, x + 5 * scale, y + 10 * scale,
+                    x + 5 * scale, y + 10 * scale, x + 9 * scale, y + 10 * scale,
+                    x + 12 * scale, y + 10 * scale, x + 12 * scale, y + 7 * scale, x + 9 * scale, y + 7 * scale,
+                    x + 7 * scale, y + 7 * scale, x + 8 * scale, y + 4 * scale, x + 12 * scale, y));
+            commands.append("S Q\n");
+        }
+
+        private void text(String value, float x, float y, float size, double[] color, boolean bold, Align align) {
+            text(value, x, y, size, color, bold, align, Float.MAX_VALUE);
+        }
+
+        private void text(
+                String value, float x, float y, float size, double[] color, boolean bold, Align align, float maxWidth) {
+            String safe = safePdfText(value);
+            if (maxWidth < Float.MAX_VALUE) safe = fitPdfText(safe, maxWidth, size);
+            float estimatedWidth = safe.length() * size * 0.52f;
+            float textX = align == Align.RIGHT ? x - estimatedWidth
+                    : align == Align.CENTER ? x - estimatedWidth / 2 : x;
+            commands.append(String.format(Locale.ROOT, "BT /%s %.2f Tf %.3f %.3f %.3f rg %.2f %.2f Td (%s) Tj ET%n",
+                    bold ? "F2" : "F1", size, color[0], color[1], color[2], textX, y,
+                    safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")));
+        }
+
+        private String content() {
+            return commands.toString();
+        }
+    }
+
+    private static String safePdfText(String value) {
+        if (value == null) return "";
+        StringBuilder safe = new StringBuilder();
+        for (char character : value.toCharArray()) {
+            if (character >= 32 && character <= 126) safe.append(character);
+            else if (character == '\u20ac') safe.append("EUR");
+            else if (character == '\u20b9') safe.append("INR");
+            else if (character == '\u2013' || character == '\u2014' || character == '\u2212') safe.append('-');
+            else if (character == '\u00b7') safe.append(" | ");
+            else safe.append('?');
+        }
+        return safe.toString();
+    }
+
+    private static String fitPdfText(String value, float width, float size) {
+        int maxCharacters = Math.max(1, (int) (width / (size * 0.52f)));
+        return value.length() <= maxCharacters ? value : value.substring(0, maxCharacters - 3) + "...";
     }
 
     private static String money(BigDecimal amount) {
@@ -1374,5 +2003,6 @@ public class HrPayrollService {
         return new ResponseStatusException(HttpStatus.CONFLICT, message);
     }
 
-    private record MonthlyAttendance(int workingDays, BigDecimal paidDays, BigDecimal overtimeHours) {}
+    private record MonthlyAttendance(
+            int workingDays, BigDecimal paidDays, BigDecimal overtimeHours, BigDecimal weeklyOffDays) {}
 }

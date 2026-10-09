@@ -355,9 +355,9 @@ public class HrPayrollController {
 
     @PostMapping("/payroll/{id}/calculate")
     @PreAuthorize(PAYROLL_ROLES)
-    public ResponseEntity<?> calculatePayroll(@PathVariable String id) {
+    public ResponseEntity<?> calculatePayroll(@PathVariable String id, Principal principal) {
         try {
-            return ResponseEntity.ok(service.calculatePayroll(id));
+            return ResponseEntity.ok(service.calculatePayroll(id, principal.getName()));
         } catch (ResponseStatusException exception) {
             String reason = exception.getReason();
             String message;
@@ -381,6 +381,52 @@ public class HrPayrollController {
         }
     }
 
+    @GetMapping("/payroll/{id}/prechecks")
+    @PreAuthorize(PAYROLL_ROLES)
+    public Map<String, Object> payrollPrechecks(@PathVariable String id) {
+        return service.payrollPrechecks(id);
+    }
+
+    @GetMapping("/payroll/{id}/audit")
+    @PreAuthorize(PAYROLL_APPROVAL_ROLES)
+    public List<com.example.MedcareApp.Entity.hrpayroll.PayrollAuditLog> payrollAudit(@PathVariable String id) {
+        return service.payrollAudit(id);
+    }
+
+    @PostMapping("/payroll/{id}/employees/{employeeId}/hold")
+    @PreAuthorize(PAYROLL_ROLES)
+    public PayrollRun setSalaryHold(
+            @PathVariable String id,
+            @PathVariable String employeeId,
+            @RequestBody SalaryHoldRequest request,
+            Principal principal) {
+        return service.setSalaryHold(id, employeeId, request.hold(), request.reason(), principal.getName());
+    }
+
+    @PostMapping("/payroll/{id}/employees/{employeeId}/adjustments")
+    @PreAuthorize(PAYROLL_ROLES)
+    public PayrollRun addPayrollAdjustment(
+            @PathVariable String id,
+            @PathVariable String employeeId,
+            @RequestBody PayrollAdjustmentRequest request,
+            Principal principal) {
+        return service.addPayrollAdjustment(id, employeeId, request.type(), request.code(), request.name(),
+                request.amount(), request.reason(), principal.getName());
+    }
+
+    @PostMapping("/payroll/{id}/reopen")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN')")
+    public PayrollRun reopenPayroll(
+            @PathVariable String id, @RequestBody ReopenPayrollRequest request, Principal principal) {
+        return service.reopenPayroll(id, request.reason(), principal.getName());
+    }
+
+    @PostMapping("/payroll/{id}/request-approval")
+    @PreAuthorize(PAYROLL_ROLES)
+    public PayrollRun requestPayrollApproval(@PathVariable String id, Principal principal) {
+        return service.requestPayrollApproval(id, principal.getName());
+    }
+
     @PostMapping("/payroll/{id}/approve")
     @PreAuthorize(PAYROLL_APPROVAL_ROLES)
     public PayrollRun approvePayroll(@PathVariable String id, Principal principal) {
@@ -389,26 +435,27 @@ public class HrPayrollController {
 
     @PostMapping("/payroll/{id}/reject")
     @PreAuthorize(PAYROLL_ROLES)
-    public PayrollRun rejectPayroll(@PathVariable String id, @RequestBody(required = false) Map<String, String> request) {
-        return service.rejectPayroll(id, request == null ? null : request.get("reason"));
+    public PayrollRun rejectPayroll(
+            @PathVariable String id, @RequestBody(required = false) Map<String, String> request, Principal principal) {
+        return service.rejectPayroll(id, request == null ? null : request.get("reason"), principal.getName());
     }
 
     @PostMapping("/payroll/{id}/reset")
     @PreAuthorize(PAYROLL_ROLES)
-    public PayrollRun resetRejectedPayroll(@PathVariable String id) {
-        return service.resetRejectedPayroll(id);
+    public PayrollRun resetRejectedPayroll(@PathVariable String id, Principal principal) {
+        return service.resetRejectedPayroll(id, principal.getName());
     }
 
     @PostMapping("/payroll/{id}/process")
     @PreAuthorize(PAYROLL_ROLES)
-    public PayrollRun processPayroll(@PathVariable String id) {
-        return service.processPayroll(id);
+    public PayrollRun processPayroll(@PathVariable String id, Principal principal) {
+        return service.processPayroll(id, principal.getName());
     }
 
     @PostMapping("/payroll/{id}/paid")
     @PreAuthorize(PAYROLL_ROLES)
-    public PayrollRun markPayrollPaid(@PathVariable String id) {
-        return service.markPayrollPaid(id);
+    public PayrollRun markPayrollPaid(@PathVariable String id, Principal principal) {
+        return service.markPayrollPaid(id, principal.getName());
     }
 
     @GetMapping("/payroll/me/payslips")
@@ -472,4 +519,11 @@ public class HrPayrollController {
         return authentication.getAuthorities().stream()
                 .anyMatch(authority -> List.of(roles).contains(authority.getAuthority().replaceFirst("^ROLE_", "")));
     }
+
+    public record SalaryHoldRequest(boolean hold, String reason) {}
+
+    public record PayrollAdjustmentRequest(
+            String type, String code, String name, BigDecimal amount, String reason) {}
+
+    public record ReopenPayrollRequest(String reason) {}
 }

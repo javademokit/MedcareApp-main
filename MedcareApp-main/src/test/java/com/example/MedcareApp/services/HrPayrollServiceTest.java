@@ -14,6 +14,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.hrpayroll.EmployeeType;
 import com.example.MedcareApp.Entity.hrpayroll.LeaveRequest;
 import com.example.MedcareApp.Entity.hrpayroll.OvertimeAllowanceRequest;
+import com.example.MedcareApp.Entity.hrpayroll.PayrollAuditLog;
 import com.example.MedcareApp.Entity.hrpayroll.PayrollRun;
 import com.example.MedcareApp.Entity.hrpayroll.Payslip;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryComponent;
@@ -30,6 +31,38 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.web.server.ResponseStatusException;
 
 class HrPayrollServiceTest {
+    @Test
+    void submitsCalculatedPayrollForApproval() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun run = new PayrollRun();
+        run.setId("run-1");
+        run.setStatus("CALCULATED");
+        when(mongo.findById("run-1", PayrollRun.class)).thenReturn(run);
+        when(mongo.save(any(PayrollRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        PayrollRun submitted = new HrPayrollService(mongo).requestPayrollApproval("run-1", "maker@example.test");
+
+        assertEquals("PENDING_APPROVAL", submitted.getStatus());
+        verify(mongo).save(any(PayrollAuditLog.class));
+    }
+
+    @Test
+    void cannotApprovePayrollBeforeItIsSubmittedForApproval() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun run = new PayrollRun();
+        run.setId("run-1");
+        run.setStatus("CALCULATED");
+        when(mongo.findById("run-1", PayrollRun.class)).thenReturn(run);
+
+        ResponseStatusException error = org.junit.jupiter.api.Assertions.assertThrows(
+                ResponseStatusException.class,
+                () -> new HrPayrollService(mongo).approvePayroll("run-1", "approver@example.test"));
+
+        assertEquals(409, error.getStatusCode().value());
+        org.junit.jupiter.api.Assertions.assertTrue(error.getReason().contains("submitted for approval"));
+        verify(mongo, never()).save(any(PayrollRun.class));
+    }
+
     @Test
     void explainsWhichSavedPayrollRunBlocksCreatingADuplicate() {
         MongoTemplate mongo = mock(MongoTemplate.class);
@@ -117,14 +150,38 @@ class HrPayrollServiceTest {
         payslip.setAadhaarLastFour("9012");
         payslip.setPfUanNumber("123456789012");
         payslip.setMonth("2026-10");
+        payslip.setDaysInMonth(31);
+        payslip.setPaidDays(new BigDecimal("29"));
+        payslip.setUnpaidDays(new BigDecimal("2"));
+        payslip.setWeeklyOffDays(new BigDecimal("4"));
+        payslip.setOvertimeHours(new BigDecimal("6"));
+        payslip.setGrossSalary(new BigDecimal("33800"));
+        payslip.setTotalDeduction(new BigDecimal("3650"));
+        payslip.setNetSalary(new BigDecimal("30150"));
+        PayrollRun.ComponentAmount basic = new PayrollRun.ComponentAmount();
+        basic.setName("Basic");
+        basic.setAmount(new BigDecimal("18000"));
+        payslip.setEarnings(List.of(basic));
+        PayrollRun.ComponentAmount pf = new PayrollRun.ComponentAmount();
+        pf.setName("Provident Fund (12%)");
+        pf.setAmount(new BigDecimal("1800"));
+        payslip.setDeductions(List.of(pf));
 
-        String pdf = new String(new HrPayrollService(mock(MongoTemplate.class)).payslipPdf(payslip),
+        String pdf = new String(new HrPayrollService(null).payslipPdf(payslip),
                 StandardCharsets.US_ASCII);
 
-        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("(MEDCARE) Tj"));
-        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("PAN: ABCDE1234F"));
-        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("Aadhaar: XXXX XXXX 9012"));
-        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("PF / UAN: 123456789012"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("(MEDCARE HOSPITAL) Tj"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("PAYSLIP FOR THE MONTH OF OCTOBER 2026"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("Employer registration details not provided"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("AMOUNT \\("));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("YEAR-TO-DATE"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("Paid on: Not recorded"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("ABCDE1234F"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("XXXXXXXX9012"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("(Basic) Tj"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("(Provident Fund \\(12%\\)) Tj"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("Rupees Thirty Thousand One Hundred Fifty Only"));
+        org.junit.jupiter.api.Assertions.assertTrue(pdf.contains("(Not available from saved payroll data.) Tj"));
         org.junit.jupiter.api.Assertions.assertFalse(pdf.contains("1234 5678 9012"));
     }
 
