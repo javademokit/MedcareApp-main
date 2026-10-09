@@ -26,6 +26,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +44,8 @@ public class HrPayrollController {
     private static final String OVERTIME_REVIEW_ROLES =
             "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','CRM_EXECUTIVE')";
     private static final String PAYROLL_ROLES = "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','FINANCE')";
+    private static final String PAYROLL_APPROVAL_ROLES =
+            "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','FINANCE','CRM_EXECUTIVE')";
     private static final String STAFF_ROLES = "hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','FINANCE',"
             + "'DOCTOR','NURSE','HEAD_NURSE','RECEPTIONIST','CRM_EXECUTIVE','BILLING_EXECUTIVE','PHARMACIST','LAB_TECHNICIAN')";
 
@@ -50,6 +53,15 @@ public class HrPayrollController {
 
     public HrPayrollController(HrPayrollService service) {
         this.service = service;
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleRequestConflict(ResponseStatusException exception) {
+        String message = exception.getReason() == null
+                ? "The request could not be completed"
+                : exception.getReason();
+        return ResponseEntity.status(exception.getStatusCode())
+                .body(Map.of("status", exception.getStatusCode().value(), "message", message));
     }
 
     @GetMapping("/hr/dashboard")
@@ -324,7 +336,7 @@ public class HrPayrollController {
     }
 
     @GetMapping("/payroll")
-    @PreAuthorize(PAYROLL_ROLES)
+    @PreAuthorize(PAYROLL_APPROVAL_ROLES)
     public List<PayrollRun> payrollRuns(@RequestParam(required = false) String month) {
         return service.payrollRuns(month);
     }
@@ -336,7 +348,7 @@ public class HrPayrollController {
     }
 
     @GetMapping("/payroll/{id}")
-    @PreAuthorize(PAYROLL_ROLES)
+    @PreAuthorize(PAYROLL_APPROVAL_ROLES)
     public PayrollRun payrollRun(@PathVariable String id) {
         return service.payrollRun(id);
     }
@@ -348,12 +360,20 @@ public class HrPayrollController {
             return ResponseEntity.ok(service.calculatePayroll(id));
         } catch (ResponseStatusException exception) {
             String reason = exception.getReason();
-            String message = reason == null
-                    ? "Payroll calculation failed. Review employee eligibility and salary setup."
-                    : reason;
+            String message;
             if (reason != null && reason.startsWith("Payroll cannot be calculated:")) {
-                message += ". Open Salary → Salary Structures and assign each listed employee an active structure "
-                        + "whose effective dates cover the full payroll month, then calculate again.";
+                String missingEmployees = reason.substring("Payroll cannot be calculated:".length()).trim();
+                message = "Payroll was not calculated. These active employee(s) need an active salary structure "
+                        + "covering the full payroll month: " + missingEmployees
+                        + ". Open Salary → Salary Structures, assign each employee an active structure whose "
+                        + "effective dates cover the entire month, then calculate again. After calculation succeeds, "
+                        + "the CRM team can review and approve the payroll run.";
+            } else if (reason != null) {
+                message = reason + ". Correct the employee or salary setup issue and calculate again. "
+                        + "After calculation succeeds, the CRM team can review and approve the payroll run.";
+            } else {
+                message = "Payroll was not calculated. Review employee eligibility and salary setup, then try again. "
+                        + "After calculation succeeds, the CRM team can review and approve the payroll run.";
             }
             return ResponseEntity.status(exception.getStatusCode()).body(Map.of(
                     "message", message,
@@ -362,7 +382,7 @@ public class HrPayrollController {
     }
 
     @PostMapping("/payroll/{id}/approve")
-    @PreAuthorize(PAYROLL_ROLES)
+    @PreAuthorize(PAYROLL_APPROVAL_ROLES)
     public PayrollRun approvePayroll(@PathVariable String id, Principal principal) {
         return service.approvePayroll(id, principal.getName());
     }

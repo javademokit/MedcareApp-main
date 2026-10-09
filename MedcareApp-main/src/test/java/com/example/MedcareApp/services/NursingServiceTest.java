@@ -129,6 +129,81 @@ class NursingServiceTest {
     }
 
     @Test
+    void createsMissingNurseProfileFromActiveAccountAndHrEmploymentDuringAssignment() {
+        String today = LocalDate.now().toString();
+        Patient patient = new Patient();
+        patient.setPatientId("PT-200");
+        patient.setPatientAdmitdate(today);
+        patient.setPatientWardId("ward-1");
+        patient.setPatientBedId("bed-1");
+
+        Ward ward = new Ward();
+        ward.setId("ward-1");
+        ward.setName("ICU");
+        ward.setMaxPatientsPerNurse(2);
+
+        user manager = new user();
+        manager.setId("crm-1");
+        manager.setEmailId("crm@example.test");
+        manager.setRoles(Set.of("CRM_EXECUTIVE"));
+        user nurseAccount = new user();
+        nurseAccount.setId("nurse-1");
+        nurseAccount.setEmailId("nurse@example.test");
+        nurseAccount.setRoles(Set.of("NURSE"));
+        Employee employment = new Employee();
+        employment.setEmployeeType("NURSE");
+        employment.setEmployeeCode("NR-10001");
+        employment.setFirstName("Anita");
+        employment.setLastName("Sharma");
+        employment.setEmail("nurse@example.test");
+        employment.setMobile("555-0100");
+        employment.setStatus("ACTIVE");
+        employment.setProfessionalInfo(java.util.Map.of(
+                "qualification", "BSc Nursing",
+                "registrationNumber", "RN-123",
+                "specialization", "ICU"));
+
+        NurseShiftRoster roster = new NurseShiftRoster();
+        roster.setNurseId("NR-10001");
+        roster.setWardId("ward-1");
+        roster.setShift("MORNING");
+        roster.setStartDate(today);
+        roster.setEndDate(today);
+        roster.setStatus("SCHEDULED");
+
+        when(userRepository.findById("crm@example.test")).thenReturn(Optional.empty());
+        when(userRepository.findAllByEmailIdIgnoreCase("crm@example.test")).thenReturn(List.of(manager));
+        when(userRepository.findById("NR-10001")).thenReturn(Optional.empty());
+        when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
+        when(userRepository.findAllByEmailIdIgnoreCase("nurse@example.test")).thenReturn(List.of(nurseAccount));
+        when(nurseProfileRepository.findByAccountId("NR-10001")).thenReturn(Optional.empty());
+        when(nurseProfileRepository.findByEmployeeId("NR-10001")).thenReturn(Optional.empty());
+        when(nurseProfileRepository.save(any(NurseProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(employment);
+        when(patientRepository.findAllByPatientId("PT-200")).thenReturn(List.of(patient));
+        when(wardRepository.findById("ward-1")).thenReturn(Optional.of(ward));
+        when(rosterRepository.findByWardIdAndStatus("ward-1", "SCHEDULED")).thenReturn(List.of(roster));
+        when(assignmentRepository.findAll()).thenReturn(List.of());
+        when(assignmentRepository.findByPatientIdAndStatus("PT-200", "ACTIVE")).thenReturn(List.of());
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(assignmentRepository.save(any(PatientAssignment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        PatientAssignment assignment = service.assignPatient(
+                "PT-200", "NR-10001", "PRIMARY", "MORNING", "crm@example.test");
+
+        ArgumentCaptor<NurseProfile> profileCaptor = ArgumentCaptor.forClass(NurseProfile.class);
+        verify(nurseProfileRepository).save(profileCaptor.capture());
+        assertEquals("nurse-1", profileCaptor.getValue().getAccountId());
+        assertEquals("NR-10001", profileCaptor.getValue().getEmployeeId());
+        assertEquals("Anita Sharma", profileCaptor.getValue().getName());
+        assertEquals("RN-123", profileCaptor.getValue().getLicenseNumber());
+        assertEquals("NR-10001", assignment.getNurseId());
+        assertEquals("NR-10001", patient.getPatientNurseId());
+    }
+
+    @Test
     void nurseProfileUsesTheActiveHrEmploymentIdAndDetails() {
         user admin = new user();
         admin.setId("admin-1");

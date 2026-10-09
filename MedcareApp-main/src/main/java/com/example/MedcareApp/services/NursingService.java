@@ -1495,9 +1495,51 @@ public class NursingService {
         }
     }
 
-    private NurseProfile getNurseProfile(String accountId) {
-        return findNurseProfile(accountId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Nurse profile was not found"));
+    private NurseProfile getNurseProfile(String nurseId) {
+        NurseProfile existing = findNurseProfile(nurseId).orElse(null);
+        if (existing != null) return existing;
+
+        user account = userRepository.findById(nurseId).orElse(null);
+        Employee employment = account == null
+                ? getNurseEmploymentByEmployeeCode(nurseId)
+                : getNurseEmploymentByEmployeeCode(account.getEmployeeCode());
+        if (account != null && (!account.isActive() || !isNurse(account))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Selected account is not an active nurse");
+        }
+        if (employment == null && account != null) {
+            employment = getNurseEmploymentByEmail(account.getEmailId());
+        }
+        if (employment == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Nurse profile is missing and no HR nurse employee record matches the selected nurse");
+        }
+        if (!"ACTIVE".equalsIgnoreCase(employment.getStatus())
+                || !StringUtils.hasText(employment.getEmployeeCode())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "The selected nurse needs an active HR employee record with an employee ID before assignment");
+        }
+        if (account == null && StringUtils.hasText(employment.getEmail())) {
+            account = userRepository.findAllByEmailIdIgnoreCase(employment.getEmail()).stream()
+                    .filter(candidate -> candidate.isActive() && isNurse(candidate))
+                    .findFirst().orElse(null);
+        }
+
+        NurseProfile profile = new NurseProfile();
+        profile.setAccountId(account == null ? null : account.getId());
+        profile.setEmployeeId(employment.getEmployeeCode());
+        profile.setName(employment.getFullName());
+        profile.setPhone(employment.getMobile());
+        profile.setEmail(employment.getEmail());
+        Map<String, Object> professionalInfo = employment.getProfessionalInfo() == null
+                ? Map.of() : employment.getProfessionalInfo();
+        profile.setQualification(textValue(professionalInfo.get("qualification")));
+        profile.setLicenseNumber(textValue(professionalInfo.get("registrationNumber")));
+        profile.setSpecialization(defaultValue(textValue(professionalInfo.get("specialization")), "GENERAL"));
+        profile.setDesignation(account != null && account.getRoles().contains("HEAD_NURSE")
+                ? "HEAD_NURSE" : "STAFF_NURSE");
+        profile.setStatus("ACTIVE");
+        return nurseProfileRepository.save(profile);
     }
 
     private java.util.Optional<NurseProfile> findNurseProfile(String nurseId) {

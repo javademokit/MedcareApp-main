@@ -143,7 +143,9 @@ public class SecurityConfiguration {
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE",
                                 "DOCTOR", "NURSE", "HEAD_NURSE", "RECEPTIONIST", "CRM_EXECUTIVE",
                                 "BILLING_EXECUTIVE", "PHARMACIST", "LAB_TECHNICIAN")
-                        .requestMatchers("/api/payroll/**", "/api/payslips/**").hasAnyRole(
+                        .requestMatchers("/api/payroll/**").hasAnyRole(
+                                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE", "CRM_EXECUTIVE")
+                        .requestMatchers("/api/payslips/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
                         .requestMatchers("/api/payroll/run/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
