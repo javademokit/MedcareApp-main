@@ -175,7 +175,7 @@ class NursingServiceTest {
         when(userRepository.findAllByEmailIdIgnoreCase("crm@example.test")).thenReturn(List.of(manager));
         when(userRepository.findById("NR-10001")).thenReturn(Optional.empty());
         when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
-        when(userRepository.findAllByEmailIdIgnoreCase("nurse@example.test")).thenReturn(List.of(nurseAccount));
+        when(userRepository.findAll()).thenReturn(List.of(nurseAccount));
         when(nurseProfileRepository.findByAccountId("NR-10001")).thenReturn(Optional.empty());
         when(nurseProfileRepository.findByEmployeeId("NR-10001")).thenReturn(Optional.empty());
         when(nurseProfileRepository.save(any(NurseProfile.class)))
@@ -210,8 +210,8 @@ class NursingServiceTest {
         admin.setRoles(Set.of("HOSPITAL_ADMIN"));
         user nurseAccount = new user();
         nurseAccount.setId("nurse-1");
-        nurseAccount.setEmailId("nurse@example.test");
-        nurseAccount.setMobileNo("555-0100");
+        nurseAccount.setEmailId("nurse.account@example.test");
+        nurseAccount.setMobileNo("(555) 0199");
         nurseAccount.setUserId("nurse.login");
         nurseAccount.setRoles(Set.of("NURSE"));
         Employee employment = new Employee();
@@ -219,6 +219,7 @@ class NursingServiceTest {
         employment.setEmployeeCode("EMP-10001");
         employment.setFirstName("Anita");
         employment.setLastName("Sharma");
+        employment.setEmail("nurse.hr@example.test");
         employment.setMobile("555-0199");
         employment.setStatus("ACTIVE");
         employment.setProfessionalInfo(java.util.Map.of(
@@ -229,10 +230,12 @@ class NursingServiceTest {
         when(userRepository.findById("admin@example.test")).thenReturn(Optional.empty());
         when(userRepository.findAllByEmailIdIgnoreCase("admin@example.test")).thenReturn(List.of(admin));
         when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
-        when(mongoTemplate.findOne(any(), eq(Employee.class))).thenReturn(employment);
+        when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(null);
+        when(mongoTemplate.find(any(Query.class), eq(Employee.class))).thenReturn(List.of(employment));
         when(nurseProfileRepository.findByAccountId("nurse-1")).thenReturn(Optional.empty());
         when(nurseProfileRepository.findAll()).thenReturn(List.of());
         when(nurseProfileRepository.save(any(NurseProfile.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userRepository.save(any(user.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         NurseProfile saved = service.saveNurseProfile("nurse-1", new NurseProfile(), "admin@example.test");
 
@@ -242,6 +245,8 @@ class NursingServiceTest {
         assertEquals("RN-123", saved.getLicenseNumber());
         assertEquals("BSc Nursing", saved.getQualification());
         assertEquals("ICU", saved.getSpecialization());
+        assertEquals("EMP-10001", nurseAccount.getEmployeeCode());
+        verify(userRepository).save(nurseAccount);
     }
 
     @Test

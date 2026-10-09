@@ -77,15 +77,7 @@ public class NursingController {
                 .toList();
         return nursingService.getNurseEmployments().stream()
                 .map(employment -> {
-                    user account = nurseAccounts.stream()
-                            .filter(candidate -> StringUtils.hasText(candidate.getEmployeeCode())
-                                    && candidate.getEmployeeCode().equalsIgnoreCase(employment.getEmployeeCode()))
-                            .findFirst()
-                            .orElseGet(() -> nurseAccounts.stream()
-                                    .filter(candidate -> StringUtils.hasText(candidate.getEmailId())
-                                            && StringUtils.hasText(employment.getEmail())
-                                            && candidate.getEmailId().equalsIgnoreCase(employment.getEmail()))
-                                    .findFirst().orElse(null));
+                    user account = nursingService.getNurseAccountForEmployment(employment, nurseAccounts);
                     NurseProfile profile = profilesByEmployeeId.get(employment.getEmployeeCode());
                     if (profile == null && account != null) profile = profilesByAccountId.get(account.getId());
                     return new NurseAccountEmployment(account, employment, profile);

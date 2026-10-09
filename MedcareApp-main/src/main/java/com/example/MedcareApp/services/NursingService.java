@@ -86,6 +86,45 @@ public class NursingService {
                 .and("email").regex(escapedEmail, "i")), Employee.class);
     }
 
+    public user getNurseAccountForEmployment(Employee employment, List<user> nurseAccounts) {
+        if (employment == null) return null;
+        user account = nurseAccounts.stream()
+                .filter(candidate -> StringUtils.hasText(candidate.getEmployeeCode())
+                        && candidate.getEmployeeCode().equalsIgnoreCase(employment.getEmployeeCode()))
+                .findFirst().orElse(null);
+        if (account == null && StringUtils.hasText(employment.getEmail())) {
+            account = nurseAccounts.stream()
+                    .filter(candidate -> StringUtils.hasText(candidate.getEmailId())
+                            && candidate.getEmailId().equalsIgnoreCase(employment.getEmail()))
+                    .findFirst().orElse(null);
+        }
+        if (account == null && StringUtils.hasText(employment.getMobile())) {
+            String employmentMobile = employment.getMobile().replaceAll("\\D", "");
+            List<user> mobileMatches = nurseAccounts.stream()
+                    .filter(candidate -> StringUtils.hasText(candidate.getMobileNo())
+                            && employmentMobile.equals(candidate.getMobileNo().replaceAll("\\D", "")))
+                    .toList();
+            if (mobileMatches.size() == 1) account = mobileMatches.get(0);
+        }
+        return account;
+    }
+
+    private Employee getNurseEmployment(user account) {
+        Employee employment = getNurseEmploymentByEmployeeCode(account.getEmployeeCode());
+        if (employment == null) employment = getNurseEmploymentByEmail(account.getEmailId());
+        if (employment == null && StringUtils.hasText(account.getMobileNo())) {
+            String accountMobile = account.getMobileNo().replaceAll("\\D", "");
+            if (accountMobile.length() >= 7) {
+                List<Employee> matches = getNurseEmployments().stream()
+                        .filter(candidate -> StringUtils.hasText(candidate.getMobile())
+                                && accountMobile.equals(candidate.getMobile().replaceAll("\\D", "")))
+                        .toList();
+                if (matches.size() == 1) employment = matches.get(0);
+            }
+        }
+        return employment;
+    }
+
     private Employee getNurseEmploymentByEmployeeCode(String employeeCode) {
         if (!StringUtils.hasText(employeeCode)) return null;
         return mongoTemplate.findOne(Query.query(Criteria.where("employeeType").is("NURSE")
@@ -195,7 +234,11 @@ public class NursingService {
     public NurseProfile saveNurseProfile(String accountId, NurseProfile profile, String actor) {
         requireProfileScope(accountId, actor);
         user account = getNurseAccount(accountId);
-        Employee employment = getNurseEmploymentByEmail(account.getEmailId());
+        Employee employment = getNurseEmployment(account);
+        if (employment == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No HR nurse employee record matches this nurse account. Add a Nurse employee in HR with the same employee ID, email, or unique mobile number.");
+        }
         Map<String, Object> professionalInfo = employment.getProfessionalInfo() == null
                 ? Map.of() : employment.getProfessionalInfo();
         String licenseNumber = textValue(professionalInfo.get("registrationNumber"));
@@ -1502,27 +1545,28 @@ public class NursingService {
         user account = userRepository.findById(nurseId).orElse(null);
         Employee employment = account == null
                 ? getNurseEmploymentByEmployeeCode(nurseId)
-                : getNurseEmploymentByEmployeeCode(account.getEmployeeCode());
+                : getNurseEmployment(account);
         if (account != null && (!account.isActive() || !isNurse(account))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Selected account is not an active nurse");
         }
-        if (employment == null && account != null) {
-            employment = getNurseEmploymentByEmail(account.getEmailId());
-        }
         if (employment == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "Nurse profile is missing and no HR nurse employee record matches the selected nurse");
+                    "No HR nurse employee record matches the selected nurse. Add a Nurse employee in HR with an active status and employee ID before assigning them.");
         }
         if (!"ACTIVE".equalsIgnoreCase(employment.getStatus())
                 || !StringUtils.hasText(employment.getEmployeeCode())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "The selected nurse needs an active HR employee record with an employee ID before assignment");
         }
-        if (account == null && StringUtils.hasText(employment.getEmail())) {
-            account = userRepository.findAllByEmailIdIgnoreCase(employment.getEmail()).stream()
+        if (account != null && !employment.getEmployeeCode().equals(account.getEmployeeCode())) {
+            account.setEmployeeCode(employment.getEmployeeCode());
+            userRepository.save(account);
+        }
+        if (account == null) {
+            account = getNurseAccountForEmployment(employment, userRepository.findAll().stream()
                     .filter(candidate -> candidate.isActive() && isNurse(candidate))
-                    .findFirst().orElse(null);
+                    .toList());
         }
 
         NurseProfile profile = new NurseProfile();
@@ -1554,7 +1598,7 @@ public class NursingService {
         Employee employment = getNurseEmploymentByEmployeeCode(profile.getEmployeeId());
         if (employment == null && StringUtils.hasText(profile.getAccountId())) {
             user account = userRepository.findById(profile.getAccountId()).orElse(null);
-            employment = account == null ? null : getNurseEmploymentByEmail(account.getEmailId());
+            employment = account == null ? null : getNurseEmployment(account);
         }
         if (employment == null || !"ACTIVE".equalsIgnoreCase(employment.getStatus())
                 || !StringUtils.hasText(employment.getEmployeeCode())) return false;
@@ -1580,11 +1624,19 @@ public class NursingService {
         if (!account.isActive() || !isNurse(account)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected account is not an active nurse");
         }
-        Employee employment = getNurseEmploymentByEmail(account.getEmailId());
-        if (employment == null || !"ACTIVE".equalsIgnoreCase(employment.getStatus())
+        Employee employment = getNurseEmployment(account);
+        if (employment == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No HR nurse employee record matches this nurse account. Add a Nurse employee in HR with the same employee ID, email, or unique mobile number.");
+        }
+        if (!"ACTIVE".equalsIgnoreCase(employment.getStatus())
                 || !StringUtils.hasText(employment.getEmployeeCode())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Complete an active nurse employment record with an employee ID in HR before scheduling or assigning this nurse");
+                    "The matched HR nurse employee record is inactive or has no employee ID. Activate the employee and assign an employee ID in HR before scheduling or assigning this nurse.");
+        }
+        if (!employment.getEmployeeCode().equals(account.getEmployeeCode())) {
+            account.setEmployeeCode(employment.getEmployeeCode());
+            userRepository.save(account);
         }
         return account;
     }

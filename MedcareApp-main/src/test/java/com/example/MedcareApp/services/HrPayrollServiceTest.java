@@ -31,6 +31,26 @@ import org.springframework.web.server.ResponseStatusException;
 
 class HrPayrollServiceTest {
     @Test
+    void explainsWhichSavedPayrollRunBlocksCreatingADuplicate() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun existingRun = new PayrollRun();
+        existingRun.setId("payroll-oct-2026");
+        existingRun.setMonth("2026-10");
+        existingRun.setStatus("DRAFT");
+        when(mongo.findOne(any(Query.class), eq(PayrollRun.class))).thenReturn(existingRun);
+
+        ResponseStatusException error = org.junit.jupiter.api.Assertions.assertThrows(
+                ResponseStatusException.class,
+                () -> new HrPayrollService(mongo).createPayrollRun("2026-10", "hr@example.test"));
+
+        assertEquals(409, error.getStatusCode().value());
+        org.junit.jupiter.api.Assertions.assertTrue(error.getReason().contains("payroll-oct-2026"));
+        org.junit.jupiter.api.Assertions.assertTrue(error.getReason().contains("status: DRAFT"));
+        org.junit.jupiter.api.Assertions.assertTrue(error.getReason().contains("Payroll History"));
+        verify(mongo, never()).save(any(PayrollRun.class));
+    }
+
+    @Test
     void normalizesOptionalStatutoryIdentifiersAndDoesNotExposeFullAadhaarInEmployeeList() {
         MongoTemplate mongo = mock(MongoTemplate.class);
         EmployeeType otherType = new EmployeeType();

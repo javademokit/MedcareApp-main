@@ -649,7 +649,12 @@ public class HrPayrollService {
 
     public PayrollRun createPayrollRun(String monthValue, String actor) {
         String month = parseMonth(monthValue).toString();
-        if (payrollForMonth(month) != null) throw conflict("A payroll run already exists for " + month);
+        PayrollRun existingRun = payrollForMonth(month);
+        if (existingRun != null) {
+            throw conflict("A payroll run for " + month + " already exists (run ID: " + existingRun.getId()
+                    + ", status: " + existingRun.getStatus()
+                    + "). The run is still saved. Open Payroll History to continue it; no new run was created.");
+        }
         PayrollRun run = new PayrollRun();
         run.setMonth(month);
         run.setStatus("DRAFT");
