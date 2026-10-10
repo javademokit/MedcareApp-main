@@ -1,6 +1,7 @@
 package com.example.MedcareApp.Entity;
 
 import lombok.Data;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -20,6 +21,9 @@ public class Appointment {
     private String mobileNo;
     private String patientEmailId;
     private String patientAddress;
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private boolean registerNewPatient;
 
     private String doctorId;
     private String doctor;

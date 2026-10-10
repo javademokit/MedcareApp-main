@@ -12,8 +12,11 @@ import com.example.MedcareApp.Entity.billing.AppointmentInvoice;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDateTime;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.format.DateTimeParseException;
@@ -34,6 +37,11 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @RequiredArgsConstructor
 public class AppointmentService {
+    private static final DateTimeFormatter TWELVE_HOUR_TIME =
+            new DateTimeFormatterBuilder().parseCaseInsensitive().appendPattern("h:mm a").toFormatter(Locale.ENGLISH);
+    private static final DateTimeFormatter TWENTY_FOUR_HOUR_TIME = DateTimeFormatter.ofPattern("HH:mm");
+    private static final long FOLLOW_UP_WINDOW_HOURS = 48;
+
     private final AppointmentRepository appointmentRepository;
     private final AppointmentSlotReservationRepository slotReservationRepository;
     private final DoctorRepository doctorRepository;
@@ -70,7 +78,9 @@ public class AppointmentService {
         try {
             Patient patient = StringUtils.hasText(appointment.getPatientId())
                     ? findPatient(appointment.getPatientId())
-                    : findOrCreatePatient(appointment);
+                    : appointment.isRegisterNewPatient()
+                            ? createPatient(appointment)
+                            : findOrCreatePatient(appointment);
             appointment.setFee(hasRecentAppointment(patient) ? "0.00"
                     : BigDecimal.valueOf(doctor.getDoctorfee()).setScale(2, RoundingMode.HALF_UP).toPlainString());
             appointment.setPatientId(patient.getPatientId());
@@ -107,25 +117,33 @@ public class AppointmentService {
     }
 
     private boolean hasRecentAppointment(Patient patient) {
-        LocalDate today = LocalDate.now();
-        java.util.stream.Stream<Appointment> byPatientId =
-                appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc(patient.getPatientId()).stream();
-        java.util.stream.Stream<Appointment> byMobile = StringUtils.hasText(patient.getPatientmobileNo())
-                ? appointmentRepository.findAllByMobileNo(patient.getPatientmobileNo()).stream()
-                : java.util.stream.Stream.empty();
-        return java.util.stream.Stream.concat(byPatientId, byMobile)
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime followUpCutoff = now.minusHours(FOLLOW_UP_WINDOW_HOURS);
+        return appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc(patient.getPatientId()).stream()
                 .filter(appointment -> !"cancelled".equalsIgnoreCase(appointment.getAppointmentStatus()))
-                .map(Appointment::getDate)
-                .filter(StringUtils::hasText)
-                .map(date -> {
-                    try {
-                        return LocalDate.parse(date);
-                    } catch (DateTimeParseException exception) {
-                        return null;
-                    }
-                })
-                .filter(date -> date != null && !date.isAfter(today))
-                .anyMatch(date -> ChronoUnit.DAYS.between(date, today) <= 15);
+                .map(this::appointmentDateTime)
+                .filter(dateTime -> dateTime != null
+                        && !dateTime.isBefore(followUpCutoff)
+                        && !dateTime.isAfter(now))
+                .findAny()
+                .isPresent();
+    }
+
+    private LocalDateTime appointmentDateTime(Appointment appointment) {
+        if (!StringUtils.hasText(appointment.getDate())) return null;
+        try {
+            LocalDate date = LocalDate.parse(appointment.getDate());
+            if (!StringUtils.hasText(appointment.getTime())) return date.atStartOfDay();
+            LocalTime time;
+            try {
+                time = LocalTime.parse(appointment.getTime().trim(), TWELVE_HOUR_TIME);
+            } catch (DateTimeParseException exception) {
+                time = LocalTime.parse(appointment.getTime().trim(), TWENTY_FOUR_HOUR_TIME);
+            }
+            return LocalDateTime.of(date, time);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
     }
 
     public Appointment bookForPatient(String patientId, Appointment appointment) {
@@ -267,6 +285,11 @@ public class AppointmentService {
         }
         if (matches.size() == 1) return matches.get(0);
 
+        return createPatient(appointment);
+    }
+
+    private Patient createPatient(Appointment appointment) {
+        String mobileNo = appointment.getMobileNo().trim();
         Patient patient = new Patient();
         patient.setPatientId("PT-" + UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT));
         patient.setPatientName(appointment.getPatientName().trim());

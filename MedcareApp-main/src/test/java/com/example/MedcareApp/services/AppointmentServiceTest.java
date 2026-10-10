@@ -1,9 +1,11 @@
 package com.example.MedcareApp.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,7 +20,10 @@ import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.PatientRepository;
 import com.example.MedcareApp.services.AppointmentBillingService;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -111,6 +116,28 @@ class AppointmentServiceTest {
         assertEquals("Dr. Other", booked.getDoctor());
         assertEquals("doctor-profile-2", booked.getDoctorId());
         verify(patientRepository).save(patient);
+    }
+
+    @Test
+    void bookingNewPatientCanReuseMobileNumberWhenExplicitlyRequested() {
+        prepareDoctorAndSlot();
+        Patient existingPatient = new Patient();
+        existingPatient.setPatientId("PT-EXISTING");
+        existingPatient.setPatientName("Existing Patient");
+        existingPatient.setPatientmobileNo("5551234");
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
+        Appointment request = appointment();
+        request.setPatientName("Shyam");
+        request.setRegisterNewPatient(true);
+
+        Appointment booked = service.bookAppointment(request);
+
+        assertEquals("Shyam", booked.getPatientName());
+        assertNotEquals("PT-EXISTING", booked.getPatientId());
+        assertEquals("5551234", booked.getMobileNo());
+        verify(patientRepository).save(any(Patient.class));
     }
 
     @Test
@@ -231,7 +258,7 @@ class AppointmentServiceTest {
     }
 
     @Test
-    void bookingWithinFifteenDaysGetsNoChargeInvoice() {
+    void bookingWithinFortyEightHoursGetsNoChargeInvoice() {
         prepareDoctorAndSlot();
         Patient patient = new Patient();
         patient.setPatientId("PT-EXISTING");
@@ -242,11 +269,12 @@ class AppointmentServiceTest {
         when(patientRepository.findAllByPatientId("PT-EXISTING")).thenReturn(List.of(patient));
         when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
         Appointment previous = new Appointment();
-        previous.setDate(LocalDate.now().minusDays(15).toString());
+        LocalDateTime previousDateTime = LocalDateTime.now().minusHours(47);
+        previous.setDate(previousDateTime.toLocalDate().toString());
+        previous.setTime(previousDateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)));
         previous.setAppointmentStatus("completed");
         when(appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc("PT-EXISTING"))
                 .thenReturn(List.of(previous));
-        when(appointmentRepository.findAllByMobileNo("5551234")).thenReturn(List.of());
         when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
         AppointmentInvoice noChargeInvoice = new AppointmentInvoice();
         noChargeInvoice.setId("invoice-follow-up");
@@ -268,6 +296,53 @@ class AppointmentServiceTest {
         assertEquals("0.00", booked.getBalanceDue());
     }
 
+    @Test
+    void bookingAfterFortyEightHoursChargesTheConsultationFee() {
+        prepareDoctorAndSlot();
+        Patient patient = new Patient();
+        patient.setPatientId("PT-EXISTING");
+        patient.setPatientName("Existing Patient");
+        patient.setPatientAge("37");
+        patient.setGender("Female");
+        patient.setPatientmobileNo("5551234");
+        when(patientRepository.findAllByPatientId("PT-EXISTING")).thenReturn(List.of(patient));
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc("PT-EXISTING"))
+                .thenReturn(List.of(appointmentHoursAgo(49)));
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
+        Appointment request = appointment();
+        request.setPatientId("PT-EXISTING");
+
+        Appointment booked = service.bookAppointment(request);
+
+        assertEquals("500.00", booked.getFee());
+    }
+
+    @Test
+    void recentAppointmentForAnotherPatientWithSameMobileDoesNotApplyFollowUpFee() {
+        prepareDoctorAndSlot();
+        Patient patient = new Patient();
+        patient.setPatientId("PT-NEW-PATIENT");
+        patient.setPatientName("New Patient");
+        patient.setPatientAge("37");
+        patient.setGender("Female");
+        patient.setPatientmobileNo("5551234");
+        when(patientRepository.findAllByPatientId("PT-NEW-PATIENT")).thenReturn(List.of(patient));
+        when(patientRepository.save(any(Patient.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(appointmentRepository.findAllByPatientIdOrderByDateDescTimeDesc("PT-NEW-PATIENT"))
+                .thenReturn(List.of());
+        when(appointmentRepository.save(any(Appointment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        prepareInvoice();
+        Appointment request = appointment();
+        request.setPatientId("PT-NEW-PATIENT");
+
+        Appointment booked = service.bookAppointment(request);
+
+        assertEquals("500.00", booked.getFee());
+        verify(appointmentRepository, never()).findAllByMobileNo("5551234");
+    }
+
     private Appointment appointment() {
         Appointment appointment = new Appointment();
         appointment.setPatientName("A Patient");
@@ -278,6 +353,16 @@ class AppointmentServiceTest {
         appointment.setDoctor("Dr. Example");
         appointment.setDate(LocalDate.now().plusDays(1).toString());
         appointment.setTime("10:00 AM");
+        return appointment;
+    }
+
+    private Appointment appointmentHoursAgo(long hoursAgo) {
+        LocalDateTime dateTime = LocalDateTime.now().minusHours(hoursAgo);
+        Appointment appointment = new Appointment();
+        appointment.setPatientId("PT-EXISTING");
+        appointment.setDate(dateTime.toLocalDate().toString());
+        appointment.setTime(dateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)));
+        appointment.setAppointmentStatus("completed");
         return appointment;
     }
 
