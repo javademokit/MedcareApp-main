@@ -26,6 +26,8 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -101,7 +103,8 @@ public class SecurityConfiguration {
             HttpSecurity http,
             AuthenticationProvider authenticationProvider,
             SecurityContextRepository securityContextRepository,
-            CorsConfigurationSource corsConfigurationSource) throws Exception {
+            CorsConfigurationSource corsConfigurationSource,
+            Environment environment) throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
@@ -109,7 +112,14 @@ public class SecurityConfiguration {
                                 "/api/ambulance/tracking/pair", "/api/ambulance/tracking/location"))
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authenticationProvider(authenticationProvider)
-                .authorizeHttpRequests(authorize -> authorize
+                .authorizeHttpRequests(authorize -> {
+                    if (environment.acceptsProfiles(Profiles.of("local"))) {
+                        authorize.requestMatchers(HttpMethod.GET, "/api/doctors", "/api/doctors/**").permitAll();
+                        authorize.requestMatchers(HttpMethod.GET, "/api/patients", "/api/patients/**").permitAll();
+                        authorize.requestMatchers(HttpMethod.GET, "/api/appointments1", "/api/appointments1/**").permitAll();
+                        authorize.requestMatchers(HttpMethod.POST, "/api/appointments1").permitAll();
+                    }
+                    authorize
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users/signup", "/api/users/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/users/csrf").permitAll()
@@ -119,6 +129,8 @@ public class SecurityConfiguration {
                         .requestMatchers("/api/patient-portal/**").hasRole("PATIENT")
                         .requestMatchers("/api/hr/**", "/api/reports/hr/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "FINANCE")
+                        .requestMatchers(HttpMethod.GET, "/api/employee-types", "/api/departments")
+                                .hasAnyRole("SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR", "CRM_EXECUTIVE")
                         .requestMatchers("/api/employees/**", "/api/employee-types/**", "/api/departments/**",
                                 "/api/designations/**", "/api/shifts/**", "/api/attendance/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "HR")
@@ -267,7 +279,8 @@ public class SecurityConfiguration {
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE")
                         .requestMatchers("/api/reports/**").hasAnyRole(
                                 "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE", "BILLING_EXECUTIVE")
-                        .anyRequest().authenticated())
+                        .anyRequest().authenticated();
+                })
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(
                     new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .formLogin(AbstractHttpConfigurer::disable)

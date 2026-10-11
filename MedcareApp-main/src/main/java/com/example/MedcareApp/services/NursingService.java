@@ -233,11 +233,52 @@ public class NursingService {
 
     public NurseProfile saveNurseProfile(String accountId, NurseProfile profile, String actor) {
         requireProfileScope(accountId, actor);
-        user account = getNurseAccount(accountId);
-        Employee employment = getNurseEmployment(account);
+        user account = userRepository.findById(accountId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Nurse account was not found"));
+        if (!account.isActive() || !isNurse(account)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected account is not an active nurse");
+        }
+        boolean explicitEmployeeLink = profile != null && StringUtils.hasText(profile.getEmployeeId());
+        Employee employment = explicitEmployeeLink
+            ? getNurseEmploymentByEmployeeCode(profile.getEmployeeId().trim())
+            : getNurseEmployment(account);
+        if (explicitEmployeeLink) {
+            user operator = findActor(actor);
+            if (!operator.getRoles().stream().anyMatch(role -> Set.of(
+                "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "CRM_EXECUTIVE").contains(role))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "Only an administrator or CRM executive can link a nurse employee record");
+            }
+        }
         if (employment == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "No HR nurse employee record matches this nurse account. Add a Nurse employee in HR with the same employee ID, email, or unique mobile number.");
+                explicitEmployeeLink
+                    ? "The selected HR employee ID was not found. Refresh the nurse directory and try again."
+                        : "No HR employee is linked to this nurse account. Enter the existing nurse employee ID below to link it; do not create another employee.");
+        }
+        if (!"ACTIVE".equalsIgnoreCase(employment.getStatus()) || !StringUtils.hasText(employment.getEmployeeCode())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "The selected HR nurse employee must be active and have an employee ID before profile creation");
+        }
+        if (explicitEmployeeLink) {
+            boolean profileLinkedToAnotherAccount = nurseProfileRepository.findAll().stream()
+                .anyMatch(existing -> employment.getEmployeeCode().equalsIgnoreCase(existing.getEmployeeId())
+                    && !accountId.equals(existing.getAccountId()));
+            if (profileLinkedToAnotherAccount) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This HR nurse employee already has a different nurse profile");
+            }
+            }
+            if (!employment.getEmployeeCode().equalsIgnoreCase(account.getEmployeeCode() == null ? "" : account.getEmployeeCode())) {
+                boolean employeeLinkedToAnotherAccount = userRepository.findAll().stream()
+                    .filter(candidate -> !accountId.equals(candidate.getId()))
+                    .anyMatch(candidate -> employment.getEmployeeCode().equalsIgnoreCase(candidate.getEmployeeCode()));
+                if (employeeLinkedToAnotherAccount) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This HR nurse employee is already linked to another account");
+                }
+                account.setEmployeeCode(employment.getEmployeeCode());
+            userRepository.save(account);
         }
         Map<String, Object> professionalInfo = employment.getProfessionalInfo() == null
                 ? Map.of() : employment.getProfessionalInfo();

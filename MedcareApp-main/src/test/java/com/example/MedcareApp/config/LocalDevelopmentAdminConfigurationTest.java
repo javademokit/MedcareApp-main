@@ -10,6 +10,7 @@ import com.example.MedcareApp.Interafce.DoctorRepository;
 import com.example.MedcareApp.Interafce.UserRepository;
 import com.example.MedcareApp.services.UserService;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -38,10 +39,9 @@ class LocalDevelopmentAdminConfigurationTest {
         runner.run(new DefaultApplicationArguments(new String[0]));
 
         verify(userRepository).save(account);
-        assertEquals(11, account.getRoles().size());
-        assertEquals("SUPER_ADMIN", account.getRoles().stream()
-                .filter("SUPER_ADMIN"::equals)
-                .findFirst()
-                .orElseThrow());
+        assertEquals(Set.of(
+            "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN", "DOCTOR", "NURSE", "HEAD_NURSE",
+            "RECEPTIONIST", "CRM_EXECUTIVE", "BILLING_EXECUTIVE", "FINANCE", "HR", "PHARMACIST",
+            "LAB_TECHNICIAN", "PATIENT"), account.getRoles());
     }
 }

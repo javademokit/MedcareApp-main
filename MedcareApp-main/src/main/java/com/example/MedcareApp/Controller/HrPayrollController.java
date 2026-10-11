@@ -71,7 +71,7 @@ public class HrPayrollController {
     }
 
     @GetMapping("/employee-types")
-    @PreAuthorize(HR_ROLES)
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','CRM_EXECUTIVE')")
     public List<EmployeeType> employeeTypes() {
         return service.employeeTypes();
     }
@@ -128,7 +128,7 @@ public class HrPayrollController {
     }
 
     @GetMapping("/departments")
-    @PreAuthorize(HR_ROLES)
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','CRM_EXECUTIVE')")
     public List<Department> departments() {
         return service.departments();
     }

@@ -75,7 +75,7 @@ public class NursingController {
                 .filter(account -> account.isActive()
                         && (account.getRoles().contains("NURSE") || account.getRoles().contains("HEAD_NURSE")))
                 .toList();
-        return nursingService.getNurseEmployments().stream()
+        List<Map<String, Object>> nurses = nursingService.getNurseEmployments().stream()
                 .map(employment -> {
                     user account = nursingService.getNurseAccountForEmployment(employment, nurseAccounts);
                     NurseProfile profile = profilesByEmployeeId.get(employment.getEmployeeCode());
@@ -116,10 +116,41 @@ public class NursingController {
                     nurse.put("employeeCode", employment.getEmployeeCode() == null ? "" : employment.getEmployeeCode());
                     nurse.put("employmentStatus", employment.getStatus() == null ? "NOT_LINKED" : employment.getStatus());
                     nurse.put("employmentActive", employmentActive);
+                        nurse.put("departmentId", employment.getDepartmentId() == null ? "" : employment.getDepartmentId());
+                        nurse.put("departmentName", employment.getDepartmentName() == null ? "" : employment.getDepartmentName());
                     nurse.put("walkIn", employment.getEmployeeCode() != null
                             && employment.getEmployeeCode().startsWith("NR-WK-"));
                     return nurse;
-                }).toList();
+                }).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+            java.util.Set<String> linkedAccountIds = nurses.stream()
+                .map(nurse -> String.valueOf(nurse.get("accountId")))
+                .filter(StringUtils::hasText)
+                .collect(java.util.stream.Collectors.toSet());
+            nurseAccounts.stream()
+                .filter(account -> !linkedAccountIds.contains(account.getId()))
+                .filter(account -> account.getRoles().stream().noneMatch(role -> List.of(
+                    "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN").contains(role)))
+                .forEach(account -> {
+                    Map<String, Object> nurse = new java.util.LinkedHashMap<>();
+                    nurse.put("id", StringUtils.hasText(account.getEmployeeCode()) ? account.getEmployeeCode() : account.getId());
+                    nurse.put("accountId", account.getId());
+                    nurse.put("userId", account.getUserId() == null ? "" : account.getUserId());
+                    nurse.put("emailId", account.getEmailId() == null ? "" : account.getEmailId());
+                    nurse.put("mobileNo", account.getMobileNo() == null ? "" : account.getMobileNo());
+                    nurse.put("profile", Map.of());
+                    nurse.put("profileComplete", false);
+                    nurse.put("status", "EMPLOYEE_LINK_REQUIRED");
+                    nurse.put("name", account.getUserId() == null ? "Nurse account" : account.getUserId());
+                    nurse.put("employeeCode", "");
+                    nurse.put("employmentStatus", "NOT_LINKED");
+                    nurse.put("employmentActive", false);
+                    nurse.put("departmentId", "");
+                    nurse.put("departmentName", "");
+                    nurse.put("walkIn", false);
+                    nurse.put("accountOnly", true);
+                    nurses.add(nurse);
+                });
+            return nurses;
     }
 
     private record NurseAccountEmployment(user account, Employee employment, NurseProfile profile) {}

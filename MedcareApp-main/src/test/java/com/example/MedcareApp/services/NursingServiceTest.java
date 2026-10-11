@@ -250,6 +250,42 @@ class NursingServiceTest {
     }
 
     @Test
+    void linksExistingHrNurseEmployeeToAccountWhenEmployeeIdIsSelected() {
+        user admin = new user();
+        admin.setId("admin-1");
+        admin.setRoles(Set.of("HOSPITAL_ADMIN"));
+        user nurseAccount = new user();
+        nurseAccount.setId("nurse-1");
+        nurseAccount.setEmailId("account@example.test");
+        nurseAccount.setRoles(Set.of("NURSE"));
+        Employee employment = new Employee();
+        employment.setEmployeeType("NURSE");
+        employment.setEmployeeCode("NR-10001");
+        employment.setFirstName("Anita");
+        employment.setLastName("Sharma");
+        employment.setStatus("ACTIVE");
+
+        when(userRepository.findById("admin@example.test")).thenReturn(Optional.empty());
+        when(userRepository.findAllByEmailIdIgnoreCase("admin@example.test")).thenReturn(List.of(admin));
+        when(userRepository.findById("nurse-1")).thenReturn(Optional.of(nurseAccount));
+        when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(employment);
+        when(userRepository.findAll()).thenReturn(List.of(admin, nurseAccount));
+        when(nurseProfileRepository.findAll()).thenReturn(List.of());
+        when(nurseProfileRepository.findByAccountId("nurse-1")).thenReturn(Optional.empty());
+        when(nurseProfileRepository.save(any(NurseProfile.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userRepository.save(any(user.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        NurseProfile requestedProfile = new NurseProfile();
+        requestedProfile.setEmployeeId("NR-10001");
+
+        NurseProfile saved = service.saveNurseProfile("nurse-1", requestedProfile, "admin@example.test");
+
+        assertEquals("NR-10001", saved.getEmployeeId());
+        assertEquals("NR-10001", nurseAccount.getEmployeeCode());
+        verify(userRepository).save(nurseAccount);
+        verify(nurseProfileRepository).save(any(NurseProfile.class));
+    }
+
+    @Test
     void createsWalkInNurseAsOneEmploymentRecordAndLinksProfileToItsEmployeeId() {
         when(mongoTemplate.find(any(Query.class), eq(Employee.class))).thenReturn(List.of());
         when(mongoTemplate.findOne(any(Query.class), eq(Employee.class))).thenReturn(null);
