@@ -6,6 +6,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Department;
 import com.example.MedcareApp.Entity.hrpayroll.Designation;
 import com.example.MedcareApp.Entity.hrpayroll.Employee;
 import com.example.MedcareApp.Entity.hrpayroll.EmployeeType;
+import com.example.MedcareApp.Entity.user;
 import com.example.MedcareApp.Entity.hrpayroll.LeaveRequest;
 import com.example.MedcareApp.Entity.hrpayroll.OvertimeAllowanceRequest;
 import com.example.MedcareApp.Entity.hrpayroll.PayrollAuditLog;
@@ -267,6 +268,61 @@ public class HrPayrollService {
         employee.setUpdatedAt(Instant.now());
         syncDoctorProfile(employee);
         return mongo.save(employee);
+    }
+
+    public Employee createNurseEmployeeForAccount(
+            String accountId, String firstName, String lastName, String mobile, String departmentId, LocalDate joiningDate) {
+        user account = mongo.findById(accountId, user.class);
+        if (account == null || !account.isActive()
+                || account.getRoles().stream().noneMatch(role -> Set.of("NURSE", "HEAD_NURSE").contains(role))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select an active nurse account");
+        }
+        if (!hasText(firstName) || !hasText(lastName) || !hasText(mobile) || joiningDate == null) {
+            throw badRequest("Nurse first name, last name, mobile, and joining date are required");
+        }
+        if (!hasText(departmentId)) throw badRequest("Choose an HR department for this nurse");
+
+        List<Employee> matchingNurses = getNurseEmployments().stream()
+                .filter(employee -> (hasText(account.getEmailId()) && hasText(employee.getEmail())
+                        && account.getEmailId().trim().equalsIgnoreCase(employee.getEmail().trim()))
+                        || (hasText(account.getMobileNo()) && hasText(employee.getMobile())
+                                && account.getMobileNo().replaceAll("\\D", "")
+                                        .equals(employee.getMobile().replaceAll("\\D", ""))))
+                .toList();
+        if (!matchingNurses.isEmpty()) {
+            String existingCode = matchingNurses.get(0).getEmployeeCode();
+            throw conflict("An HR nurse employee already matches this account"
+                    + (hasText(existingCode) ? " (" + existingCode + "). Link that employee instead." : "."));
+        }
+        String normalizedMobile = mobile.replaceAll("\\D", "");
+        if (normalizedMobile.length() < 7) throw badRequest("Enter a valid nurse mobile number");
+        boolean mobileAlreadyUsed = mongo.findAll(Employee.class).stream()
+            .filter(employee -> hasText(employee.getMobile()))
+            .anyMatch(employee -> normalizedMobile.equals(employee.getMobile().replaceAll("\\D", "")));
+        if (mobileAlreadyUsed) {
+            throw conflict("An HR employee already uses this mobile number. Link that employee instead.");
+        }
+        if (hasText(account.getEmployeeCode()) && mongo.findOne(Query.query(
+                Criteria.where("employeeCode").is(account.getEmployeeCode())), Employee.class) != null) {
+            throw conflict("This nurse account already has a different HR employee ID");
+        }
+        Department department = require(Department.class, departmentId, "Department");
+        if (!"ACTIVE".equals(department.getStatus())) throw badRequest("Choose an active HR department");
+
+        Employee employee = new Employee();
+        employee.setFirstName(firstName.trim());
+        employee.setLastName(lastName.trim());
+        employee.setMobile(mobile.trim());
+        employee.setEmail(account.getEmailId());
+        employee.setEmployeeType("NURSE");
+        employee.setDepartmentId(department.getId());
+        employee.setJoiningDate(joiningDate);
+        employee.setEmploymentType("FULL_TIME");
+        employee.setStatus("ACTIVE");
+        Employee saved = saveEmployee(employee);
+        account.setEmployeeCode(saved.getEmployeeCode());
+        mongo.save(account);
+        return saved;
     }
 
     public Employee updateEmployee(String id, Employee update) {

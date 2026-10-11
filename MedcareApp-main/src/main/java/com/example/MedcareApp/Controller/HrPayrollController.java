@@ -108,6 +108,18 @@ public class HrPayrollController {
         return service.saveEmployee(employee);
     }
 
+        public record NurseEmployeeRequest(
+            String firstName, String lastName, String mobile, String departmentId, LocalDate joiningDate) {}
+
+    @PostMapping("/nurse-employee-accounts/{accountId}")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','HOSPITAL_ADMIN','CLINIC_ADMIN','HR','CRM_EXECUTIVE')")
+    public Employee createNurseEmployeeForAccount(
+            @PathVariable String accountId, @RequestBody NurseEmployeeRequest request) {
+        if (request == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nurse employee details are required");
+        return service.createNurseEmployeeForAccount(accountId, request.firstName(), request.lastName(),
+            request.mobile(), request.departmentId(), request.joiningDate());
+    }
+
     @GetMapping("/employees/{id}")
     @PreAuthorize(HR_ROLES)
     public Employee employee(@PathVariable String id) {
