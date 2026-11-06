@@ -10,7 +10,6 @@ import com.example.MedcareApp.web.DoctorProfileRequest;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -322,7 +321,8 @@ public class UserService {
         }
 
         Patient patient = new Patient();
-        patient.setPatientId("PT-" + UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT));
+        patient.setPatientId(PatientIdentifierGenerator.generate(
+                patientId -> !patientRepository.findAllByPatientId(patientId).isEmpty()));
         patient.setPatientName(StringUtils.hasText(account.getUserId()) ? account.getUserId().trim() : "Patient");
         patient.setPatientEmailId(normalizedEmail);
         patient.setPatientmobileNo(account.getMobileNo() == null ? null : account.getMobileNo().trim());

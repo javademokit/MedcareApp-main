@@ -4,6 +4,7 @@ import lombok.Data;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Transient;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.util.UUID;
@@ -14,6 +15,8 @@ public class Appointment {
     @Id
     private String id = UUID.randomUUID().toString();
 
+    @Indexed(unique = true, sparse = true)
+    private String appointmentNumber;
     private String patientId;
     private String patientName;
     private String gender;

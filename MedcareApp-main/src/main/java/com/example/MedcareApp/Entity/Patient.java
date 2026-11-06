@@ -1,5 +1,6 @@
 package com.example.MedcareApp.Entity;
 
+import java.time.LocalDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import lombok.*;
@@ -15,6 +16,7 @@ public class Patient {
     private String patientId;
     private String patientName;
     private String patientAge;
+    private LocalDate dateOfBirth;
     private String gender;
     private String patientEmailId;
     private String patientmobileNo;

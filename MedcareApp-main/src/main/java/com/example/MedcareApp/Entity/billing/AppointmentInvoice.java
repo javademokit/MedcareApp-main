@@ -19,6 +19,7 @@ public class AppointmentInvoice {
     private String invoiceNumber = "INV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     @Indexed(unique = true)
     private String appointmentId;
+    private String appointmentNumber;
     @Version
     private Long version;
     private String patientId;

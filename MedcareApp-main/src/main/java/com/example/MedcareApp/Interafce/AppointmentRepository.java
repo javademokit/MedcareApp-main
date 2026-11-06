@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface AppointmentRepository extends MongoRepository<Appointment, String> {
+    boolean existsByAppointmentNumber(String appointmentNumber);
     List<Appointment> findAllByDoctorAndDateAndTime(String doctor, String date, String time);
     List<Appointment> findAllByDoctorAndDateOrderByTimeAsc(String doctor, String date);
     List<Appointment> findAllByDoctorIdAndDateOrderByTimeAsc(String doctorId, String date);

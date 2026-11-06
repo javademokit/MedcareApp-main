@@ -30,6 +30,7 @@ public class AppointmentBillingService {
     private AppointmentInvoice saveNewInvoice(Appointment appointment) {
         AppointmentInvoice invoice = new AppointmentInvoice();
         invoice.setAppointmentId(appointment.getId());
+        invoice.setAppointmentNumber(appointment.getAppointmentNumber());
         invoice.setPatientId(appointment.getPatientId());
         invoice.setPatientName(appointment.getPatientName());
         invoice.setPatientEmail(appointment.getPatientEmailId());

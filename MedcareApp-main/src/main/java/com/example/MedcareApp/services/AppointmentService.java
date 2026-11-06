@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -24,7 +25,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +66,7 @@ public class AppointmentService {
 
         appointment.setDoctorId(doctor.getId());
         appointment.setDoctor(doctor.getDoctorName());
+        appointment.setAppointmentNumber(generateAppointmentNumber(appointment.getDate()));
         String reservationId = slotReservationId(doctor.getId(), appointment.getDate(), appointment.getTime());
         try {
             slotReservationRepository.insert(new AppointmentSlotReservation(
@@ -291,7 +292,8 @@ public class AppointmentService {
     private Patient createPatient(Appointment appointment) {
         String mobileNo = appointment.getMobileNo().trim();
         Patient patient = new Patient();
-        patient.setPatientId("PT-" + UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT));
+        patient.setPatientId(PatientIdentifierGenerator.generate(
+                patientId -> !patientRepository.findAllByPatientId(patientId).isEmpty()));
         patient.setPatientName(appointment.getPatientName().trim());
         patient.setPatientAge(appointment.getPatientAge().trim());
         patient.setGender(appointment.getGender().trim());
@@ -327,6 +329,16 @@ public class AppointmentService {
         if (matches.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Selected doctor was not found");
         if (matches.size() != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "Doctor name is not unique");
         return matches.get(0);
+    }
+
+    private String generateAppointmentNumber(String appointmentDate) {
+        String datePrefix = LocalDate.parse(appointmentDate).format(DateTimeFormatter.BASIC_ISO_DATE);
+        for (int attempt = 0; attempt < 1000; attempt++) {
+            String number = datePrefix + "-"
+                    + java.util.concurrent.ThreadLocalRandom.current().nextInt(100_000, 1_000_000);
+            if (!appointmentRepository.existsByAppointmentNumber(number)) return number;
+        }
+        throw new IllegalStateException("Could not generate a unique appointment number");
     }
 
     private void validateBooking(Appointment appointment) {

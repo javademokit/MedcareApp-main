@@ -282,7 +282,8 @@ public class HrPayrollService {
         }
         if (!hasText(departmentId)) throw badRequest("Choose an HR department for this nurse");
 
-        List<Employee> matchingNurses = getNurseEmployments().stream()
+        List<Employee> matchingNurses = mongo.find(
+                Query.query(Criteria.where("employeeType").is("NURSE")), Employee.class).stream()
                 .filter(employee -> (hasText(account.getEmailId()) && hasText(employee.getEmail())
                         && account.getEmailId().trim().equalsIgnoreCase(employee.getEmail().trim()))
                         || (hasText(account.getMobileNo()) && hasText(employee.getMobile())
