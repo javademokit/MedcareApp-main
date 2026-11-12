@@ -17,6 +17,7 @@ public class Appointment {
 
     @Indexed(unique = true, sparse = true)
     private String appointmentNumber;
+    private Long tokenNumber;
     private String patientId;
     private String patientName;
     private String gender;
@@ -24,6 +25,18 @@ public class Appointment {
     private String mobileNo;
     private String patientEmailId;
     private String patientAddress;
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String patientPostalCode;
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private java.time.LocalDate patientDateOfBirth;
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String patientPan;
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String patientAadhaar;
     @Transient
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private boolean registerNewPatient;

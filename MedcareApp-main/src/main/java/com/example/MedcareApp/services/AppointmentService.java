@@ -47,6 +47,8 @@ public class AppointmentService {
     private final DoctorRepository doctorRepository;
     private final PatientRepository patientRepository;
     private final AppointmentBillingService billingService;
+    private final PatientIdentifierService patientIdentifierService;
+    private final AppointmentTokenService appointmentTokenService;
 
     public Appointment bookAppointment(Appointment appointment) {
         validateBooking(appointment);
@@ -82,6 +84,11 @@ public class AppointmentService {
                     : appointment.isRegisterNewPatient()
                             ? createPatient(appointment)
                             : findOrCreatePatient(appointment);
+            patientIdentifierService.updateIdentifiers(
+                    patient,
+                    appointment.getPatientPan(),
+                    appointment.getPatientAadhaar(),
+                    appointment.getPatientPostalCode());
             appointment.setFee(hasRecentAppointment(patient) ? "0.00"
                     : BigDecimal.valueOf(doctor.getDoctorfee()).setScale(2, RoundingMode.HALF_UP).toPlainString());
             appointment.setPatientId(patient.getPatientId());
@@ -92,6 +99,7 @@ public class AppointmentService {
             appointment.setPatientEmailId(patient.getPatientEmailId());
             appointment.setPatientAddress(patient.getPatientAddress());
             appointment.setAppointmentStatus("pending");
+            appointment.setTokenNumber(appointmentTokenService.nextNumberForDate(appointment.getDate()));
             patient.setPatientAppointmentdate(appointment.getDate());
             patientRepository.save(patient);
             Appointment saved = appointmentRepository.save(appointment);
@@ -296,6 +304,7 @@ public class AppointmentService {
                 patientId -> !patientRepository.findAllByPatientId(patientId).isEmpty()));
         patient.setPatientName(appointment.getPatientName().trim());
         patient.setPatientAge(appointment.getPatientAge().trim());
+        patient.setDateOfBirth(appointment.getPatientDateOfBirth());
         patient.setGender(appointment.getGender().trim());
         patient.setPatientEmailId(appointment.getPatientEmailId() == null ? null : appointment.getPatientEmailId().trim());
         patient.setPatientmobileNo(mobileNo);
@@ -350,6 +359,9 @@ public class AppointmentService {
                 || !StringUtils.hasText(appointment.getTime())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Doctor, date, and time are required");
         }
+        if (!StringUtils.hasText(appointment.getPatientName())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patient name is required");
+        }
         try {
             LocalDate appointmentDate = LocalDate.parse(appointment.getDate());
             if (appointmentDate.isBefore(LocalDate.now())) {
@@ -359,8 +371,7 @@ public class AppointmentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Appointment date must use YYYY-MM-DD");
         }
         if (!StringUtils.hasText(appointment.getPatientId())
-                && (!StringUtils.hasText(appointment.getPatientName())
-                || !StringUtils.hasText(appointment.getPatientAge())
+                && (!StringUtils.hasText(appointment.getPatientAge())
                 || !StringUtils.hasText(appointment.getGender())
                 || !StringUtils.hasText(appointment.getMobileNo()))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
