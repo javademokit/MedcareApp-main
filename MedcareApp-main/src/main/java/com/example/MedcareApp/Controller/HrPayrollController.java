@@ -441,8 +441,9 @@ public class HrPayrollController {
 
     @PostMapping("/payroll/{id}/approve")
     @PreAuthorize(PAYROLL_APPROVAL_ROLES)
-    public PayrollRun approvePayroll(@PathVariable String id, Principal principal) {
-        return service.approvePayroll(id, principal.getName());
+    public PayrollRun approvePayroll(@PathVariable String id, Principal principal, Authentication authentication) {
+        boolean adminUser = hasAnyRole(authentication, "SUPER_ADMIN", "HOSPITAL_ADMIN", "CLINIC_ADMIN");
+        return service.approvePayroll(id, principal.getName(), adminUser);
     }
 
     @PostMapping("/payroll/{id}/reject")

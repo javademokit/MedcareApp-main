@@ -56,10 +56,46 @@ class HrPayrollServiceTest {
 
         ResponseStatusException error = org.junit.jupiter.api.Assertions.assertThrows(
                 ResponseStatusException.class,
-                () -> new HrPayrollService(mongo).approvePayroll("run-1", "approver@example.test"));
+                () -> new HrPayrollService(mongo).approvePayroll("run-1", "approver@example.test", false));
 
         assertEquals(409, error.getStatusCode().value());
         org.junit.jupiter.api.Assertions.assertTrue(error.getReason().contains("submitted for approval"));
+        verify(mongo, never()).save(any(PayrollRun.class));
+    }
+
+    @Test
+    void allowsAdminToApproveTheirOwnSubmittedPayroll() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun run = new PayrollRun();
+        run.setId("run-1");
+        run.setStatus("PENDING_APPROVAL");
+        run.setCreatedBy("admin@example.test");
+        when(mongo.findById("run-1", PayrollRun.class)).thenReturn(run);
+        when(mongo.save(any(PayrollRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        PayrollRun approved = new HrPayrollService(mongo)
+                .approvePayroll("run-1", "admin@example.test", true);
+
+        assertEquals("APPROVED", approved.getStatus());
+        assertEquals("admin@example.test", approved.getApprovedBy());
+        org.junit.jupiter.api.Assertions.assertNotNull(approved.getApprovedAt());
+        verify(mongo).save(any(PayrollAuditLog.class));
+    }
+
+    @Test
+    void preventsNonAdminPayrollMakerFromApprovingTheirOwnRun() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun run = new PayrollRun();
+        run.setId("run-1");
+        run.setStatus("PENDING_APPROVAL");
+        run.setCreatedBy("maker@example.test");
+        when(mongo.findById("run-1", PayrollRun.class)).thenReturn(run);
+
+        ResponseStatusException error = org.junit.jupiter.api.Assertions.assertThrows(
+                ResponseStatusException.class,
+                () -> new HrPayrollService(mongo).approvePayroll("run-1", "maker@example.test", false));
+
+        assertEquals(403, error.getStatusCode().value());
         verify(mongo, never()).save(any(PayrollRun.class));
     }
 

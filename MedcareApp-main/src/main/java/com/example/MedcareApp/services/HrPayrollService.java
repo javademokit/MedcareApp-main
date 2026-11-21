@@ -63,7 +63,7 @@ public class HrPayrollService {
             "PRESENT", "ABSENT", "HALF_DAY", "LEAVE", "HOLIDAY", "WEEK_OFF");
     private static final Set<String> LEAVE_TYPES = Set.of(
             "CASUAL", "SICK", "ANNUAL", "MATERNITY", "PATERNITY", "EMERGENCY", "UNPAID");
-    private static final Set<String> COMPONENT_TYPES = Set.of("EARNING", "DEDUCTION");
+    private static final Set<String> COMPONENT_TYPES = Set.of("EARNING", "DEDUCTION", "EMPLOYER_CONTRIBUTION");
     private static final Set<String> CALCULATION_TYPES = Set.of("FIXED", "PERCENTAGE", "FORMULA");
 
     private final MongoTemplate mongo;
@@ -644,7 +644,9 @@ public class HrPayrollService {
         component.setCode(upper(component.getCode()));
         component.setType(upper(component.getType()));
         component.setCalculationType(upper(component.getCalculationType()));
-        if (!COMPONENT_TYPES.contains(component.getType())) throw badRequest("Component type must be EARNING or DEDUCTION");
+        if (!COMPONENT_TYPES.contains(component.getType())) {
+            throw badRequest("Component type must be EARNING, DEDUCTION, or EMPLOYER_CONTRIBUTION");
+        }
         if (!CALCULATION_TYPES.contains(component.getCalculationType())) throw badRequest("Unsupported component calculation type");
         ensureUniqueCode(SalaryComponent.class, component.getCode(), component.getId(), "Salary component");
         component.setValue(nonNegative(component.getValue()));
@@ -958,12 +960,12 @@ public class HrPayrollService {
         return saved;
     }
 
-    public PayrollRun approvePayroll(String id, String approver) {
+    public PayrollRun approvePayroll(String id, String approver, boolean allowSelfApproval) {
         PayrollRun run = payrollRun(id);
         if (!"PENDING_APPROVAL".equals(run.getStatus())) {
             throw conflict("Only payroll runs submitted for approval can be approved");
         }
-        if (hasText(run.getCreatedBy()) && run.getCreatedBy().equalsIgnoreCase(approver)) {
+        if (!allowSelfApproval && hasText(run.getCreatedBy()) && run.getCreatedBy().equalsIgnoreCase(approver)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Payroll maker and approver must be different users");
         }
