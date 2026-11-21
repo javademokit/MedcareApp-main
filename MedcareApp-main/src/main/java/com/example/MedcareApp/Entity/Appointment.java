@@ -7,6 +7,7 @@ import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Data
@@ -47,6 +48,7 @@ public class Appointment {
     private String time;
     private String reason;
     private String fee;
+    private Instant bookingTime;
     private String appointmentStatus = "pending";
     @Transient
     private String invoiceId;

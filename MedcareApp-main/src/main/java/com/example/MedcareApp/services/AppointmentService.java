@@ -15,6 +15,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
@@ -100,6 +101,7 @@ public class AppointmentService {
             appointment.setPatientAddress(patient.getPatientAddress());
             appointment.setAppointmentStatus("pending");
             appointment.setTokenNumber(appointmentTokenService.nextNumberForDate(appointment.getDate()));
+            appointment.setBookingTime(Instant.now());
             patient.setPatientAppointmentdate(appointment.getDate());
             patientRepository.save(patient);
             Appointment saved = appointmentRepository.save(appointment);
