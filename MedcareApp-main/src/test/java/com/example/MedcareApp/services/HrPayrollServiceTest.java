@@ -120,6 +120,39 @@ class HrPayrollServiceTest {
     }
 
     @Test
+    void createsDraftRunsForEveryMonthOfTheYear() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        when(mongo.findOne(any(Query.class), eq(PayrollRun.class))).thenReturn(null);
+        when(mongo.save(any(PayrollRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<PayrollRun> runs = new HrPayrollService(mongo)
+                .createMissingPayrollRunsForYear(2026, "system:annual-payroll-scheduler");
+
+        assertEquals(12, runs.size());
+        assertEquals("2026-01", runs.get(0).getMonth());
+        assertEquals("2026-12", runs.get(11).getMonth());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                runs.stream().allMatch(run -> "DRAFT".equals(run.getStatus())));
+        verify(mongo, org.mockito.Mockito.times(12)).save(any(PayrollRun.class));
+    }
+
+    @Test
+    void scheduledCalculationLeavesNonDraftPayrollRunsUnchanged() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        PayrollRun approvedRun = new PayrollRun();
+        approvedRun.setId("run-1");
+        approvedRun.setMonth("2026-11");
+        approvedRun.setStatus("APPROVED");
+        when(mongo.findOne(any(Query.class), eq(PayrollRun.class))).thenReturn(approvedRun);
+
+        PayrollRun result = new HrPayrollService(mongo)
+                .calculatePayrollIfDraft("2026-11", "system:annual-payroll-scheduler");
+
+        assertEquals(approvedRun, result);
+        verify(mongo, never()).save(any(PayrollRun.class));
+    }
+
+    @Test
     void normalizesOptionalStatutoryIdentifiersAndDoesNotExposeFullAadhaarInEmployeeList() {
         MongoTemplate mongo = mock(MongoTemplate.class);
         EmployeeType otherType = new EmployeeType();

@@ -732,6 +732,24 @@ public class HrPayrollService {
         return saved;
     }
 
+    public List<PayrollRun> createMissingPayrollRunsForYear(int year, String actor) {
+        List<PayrollRun> created = new ArrayList<>();
+        for (int month = 1; month <= 12; month++) {
+            String payrollMonth = YearMonth.of(year, month).toString();
+            if (payrollForMonth(payrollMonth) == null) {
+                created.add(createPayrollRun(payrollMonth, actor));
+            }
+        }
+        return List.copyOf(created);
+    }
+
+    public PayrollRun calculatePayrollIfDraft(String monthValue, String actor) {
+        String month = parseMonth(monthValue).toString();
+        PayrollRun run = payrollForMonth(month);
+        if (run == null || !"DRAFT".equals(run.getStatus())) return run;
+        return calculatePayroll(run.getId(), actor);
+    }
+
     public PayrollRun calculatePayroll(String id) {
         return calculatePayroll(id, "system");
     }
