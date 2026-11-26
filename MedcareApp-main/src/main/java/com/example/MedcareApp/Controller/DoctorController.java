@@ -7,6 +7,8 @@ import com.example.MedcareApp.services.HrPayrollService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import com.example.MedcareApp.services.StaffIdentifierGenerator;
+import com.example.MedcareApp.web.PayrollDoctorScheduleUpdateRequest;
+import com.example.MedcareApp.web.PayrollDoctorEmployeeCodeUpdateRequest;
 import com.example.MedcareApp.web.DoctorScheduleUpdateRequest;
 
 import java.util.List;
@@ -37,6 +39,19 @@ public class DoctorController {
             @PathVariable String employeeId, @RequestBody DoctorScheduleUpdateRequest request) {
         return hrPayrollService.updateDoctorSchedule(
                 employeeId, request.availableTimes(), request.consultationFee());
+    }
+
+    @PutMapping("/payroll-employees/{employeeCode}/schedule")
+    public Doctor updatePayrollDoctorSchedule(
+            @PathVariable String employeeCode, @RequestBody PayrollDoctorScheduleUpdateRequest request) {
+        return hrPayrollService.updatePayrollDoctorSchedule(employeeCode, request);
+    }
+
+    @PutMapping("/payroll-employees/{employeeCode}/identifier")
+    public Doctor updatePayrollDoctorIdentifier(
+            @PathVariable String employeeCode,
+            @RequestBody PayrollDoctorEmployeeCodeUpdateRequest request) {
+        return hrPayrollService.updatePayrollDoctorIdentifier(employeeCode, request.employeeCode());
     }
 
     @PostMapping

@@ -15,6 +15,7 @@ import com.example.MedcareApp.Entity.hrpayroll.Payslip;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryComponent;
 import com.example.MedcareApp.Entity.hrpayroll.SalaryStructure;
 import com.example.MedcareApp.Entity.hrpayroll.Shift;
+import com.example.MedcareApp.web.PayrollDoctorScheduleUpdateRequest;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -198,6 +199,83 @@ public class HrPayrollService {
         if ("TERMINATED".equals(upper(employee.getStatus()))) {
             throw conflict("A terminated doctor cannot be scheduled");
         }
+        List<String> normalizedTimes = normalizeDoctorTimes(availableTimes);
+        employee.setDoctorAvailableTimes(normalizedTimes);
+        if (consultationFee != null) {
+            employee.setDoctorConsultationFee(nonNegative(BigDecimal.valueOf(consultationFee)).doubleValue());
+        }
+        employee.setUpdatedAt(Instant.now());
+        syncDoctorProfile(employee);
+        mongo.save(employee);
+        return mongo.findById(employee.getDoctorProfileId(), Doctor.class);
+    }
+
+    public Doctor updatePayrollDoctorSchedule(String employeeCode, PayrollDoctorScheduleUpdateRequest request) {
+        if (!hasText(employeeCode) || !employeeCode.trim().matches("[A-Za-z0-9][A-Za-z0-9_-]{0,39}")) {
+            throw badRequest("Payroll employee code is invalid");
+        }
+        if (request == null || !hasText(request.doctorName())) {
+            throw badRequest("Doctor name is required");
+        }
+        List<String> normalizedTimes = normalizeDoctorTimes(request.availableTimes());
+        Double fee = request.consultationFee();
+        if (fee != null && !Double.isFinite(fee)) {
+            throw badRequest("Consultation fee must be a valid amount");
+        }
+
+        String code = employeeCode.trim();
+        Doctor doctor = mongo.findOne(
+                Query.query(Criteria.where("payrollEmployeeCode").is(code)), Doctor.class);
+        if (doctor == null) {
+            doctor = new Doctor();
+            doctor.setEmployeeId(StaffIdentifierGenerator.generate("DT"));
+            doctor.setDoctorfee(0);
+        }
+        doctor.setPayrollEmployeeCode(code);
+        doctor.setDoctorName(request.doctorName().trim());
+        doctor.setDoctorSpecialistName(hasText(request.doctorSpecialistName())
+                ? request.doctorSpecialistName().trim() : "General medicine");
+        doctor.setDoctorMobileNo(hasText(request.doctorMobileNo()) ? request.doctorMobileNo().trim() : null);
+        doctor.setDoctorDestination(hasText(request.doctorDestination())
+                ? request.doctorDestination().trim() : "Not assigned");
+        doctor.setDoctorAvailabletime(normalizedTimes);
+        doctor.setDoctorslot(normalizedTimes.size());
+        if (fee != null) {
+            doctor.setDoctorfee(nonNegative(BigDecimal.valueOf(fee)).doubleValue());
+        }
+        return mongo.save(doctor);
+    }
+
+    public Doctor updatePayrollDoctorIdentifier(String currentCode, String newCode) {
+        if (!hasText(currentCode) || !currentCode.trim().matches("[A-Za-z0-9][A-Za-z0-9_-]{0,39}")) {
+            throw badRequest("Current payroll employee code is invalid");
+        }
+        if (!hasText(newCode) || !newCode.trim().matches("DT-[0-9]{6}")) {
+            throw badRequest("Doctor employee ID must use the DT- plus six-digit format");
+        }
+
+        String oldCode = currentCode.trim();
+        String normalizedNewCode = newCode.trim();
+        Doctor doctor = mongo.findOne(
+                Query.query(Criteria.where("payrollEmployeeCode").is(oldCode)), Doctor.class);
+        if (doctor == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Payroll doctor profile not found");
+        }
+        Doctor linkedDuplicate = mongo.findOne(
+                Query.query(Criteria.where("payrollEmployeeCode").is(normalizedNewCode)), Doctor.class);
+        Doctor employeeIdDuplicate = mongo.findOne(
+                Query.query(Criteria.where("employeeId").is(normalizedNewCode)), Doctor.class);
+        if ((linkedDuplicate != null && !linkedDuplicate.getId().equals(doctor.getId()))
+                || (employeeIdDuplicate != null && !employeeIdDuplicate.getId().equals(doctor.getId()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Doctor employee ID is already assigned");
+        }
+
+        doctor.setPayrollEmployeeCode(normalizedNewCode);
+        doctor.setEmployeeId(normalizedNewCode);
+        return mongo.save(doctor);
+    }
+
+    private static List<String> normalizeDoctorTimes(List<String> availableTimes) {
         if (availableTimes == null || availableTimes.isEmpty()) {
             throw badRequest("Add at least one available time slot");
         }
@@ -217,14 +295,7 @@ public class HrPayrollService {
                 throw badRequest("Use HH:mm for each available time slot");
             }
         }
-        employee.setDoctorAvailableTimes(normalizedTimes);
-        if (consultationFee != null) {
-            employee.setDoctorConsultationFee(nonNegative(BigDecimal.valueOf(consultationFee)).doubleValue());
-        }
-        employee.setUpdatedAt(Instant.now());
-        syncDoctorProfile(employee);
-        mongo.save(employee);
-        return mongo.findById(employee.getDoctorProfileId(), Doctor.class);
+        return normalizedTimes;
     }
 
     private String doctorSpecialization(Employee employee) {

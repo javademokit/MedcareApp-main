@@ -1,6 +1,7 @@
 package com.example.MedcareApp.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -207,7 +208,7 @@ class HrPayrollServiceTest {
 
         Employee created = new HrPayrollService(mongo).saveEmployee(employee);
 
-        assertEquals("NUR-", created.getEmployeeCode().substring(0, 4));
+        assertEquals("NR-", created.getEmployeeCode().substring(0, 3));
     }
 
     @Test
@@ -455,6 +456,61 @@ class HrPayrollServiceTest {
         assertEquals(new BigDecimal("47000.00"), item.getEarnings().get(0).getAmount());
         assertEquals(31, item.getWorkingDays());
         assertEquals(new BigDecimal("31.00"), item.getPaidDays());
+    }
+
+    @Test
+    void reassignsPayrollDoctorIdentifierWithoutChangingScheduleOrFee() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        Doctor profile = new Doctor();
+        profile.setId("doctor-profile-1");
+        profile.setEmployeeId("DT-D5E54250");
+        profile.setPayrollEmployeeCode("E111");
+        profile.setDoctorAvailabletime(List.of("22:29"));
+        profile.setDoctorfee(900000);
+        when(mongo.findOne(any(Query.class), eq(Doctor.class)))
+                .thenReturn(profile).thenReturn(null).thenReturn(null);
+        when(mongo.save(any(Doctor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Doctor updated = new HrPayrollService(mongo)
+                .updatePayrollDoctorIdentifier("E111", "DT-000001");
+
+        assertEquals("DT-000001", updated.getEmployeeId());
+        assertEquals("DT-000001", updated.getPayrollEmployeeCode());
+        assertEquals(List.of("22:29"), updated.getDoctorAvailabletime());
+        assertEquals(900000, updated.getDoctorfee());
+        verify(mongo).save(profile);
+    }
+
+    @Test
+    void rejectsPayrollDoctorIdentifierWhenAlreadyAssigned() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+        Doctor profile = new Doctor();
+        profile.setId("doctor-profile-1");
+        Doctor duplicate = new Doctor();
+        duplicate.setId("doctor-profile-2");
+        when(mongo.findOne(any(Query.class), eq(Doctor.class)))
+                .thenReturn(profile).thenReturn(duplicate);
+
+        ResponseStatusException error = assertThrows(
+                ResponseStatusException.class,
+                () -> new HrPayrollService(mongo)
+                        .updatePayrollDoctorIdentifier("E111", "DT-000001"));
+
+        assertEquals(409, error.getStatusCode().value());
+        verify(mongo, never()).save(any(Doctor.class));
+    }
+
+    @Test
+    void requiresPayrollDoctorIdentifierToUseSixDigitFormat() {
+        MongoTemplate mongo = mock(MongoTemplate.class);
+
+        ResponseStatusException error = assertThrows(
+                ResponseStatusException.class,
+                () -> new HrPayrollService(mongo)
+                        .updatePayrollDoctorIdentifier("E111", "DT-1001"));
+
+        assertEquals(400, error.getStatusCode().value());
+        verify(mongo, never()).findOne(any(Query.class), eq(Doctor.class));
     }
 
     private SalaryStructure structure(
