@@ -1,0 +1,116 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: medora-ai
+
+  # DataSource
+  datasource:
+    url: jdbc:postgresql://localhost:5432/medora_ai
+    username: ${POSTGRES_USER:rishabhaadi}
+    password: ${POSTGRES_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+
+  # JPA
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  # Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # Spring AI - Ollama (lazy init to avoid blocking startup)
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: llama3.2
+        options:
+          temperature: 0.2
+      embedding:
+        model: nomic-embed-text
+
+    # pgvector store - disabled until VectorStore bean is defined
+    vectorstore:
+      pgvector:
+        dimensions: 768
+        index-type: HNSW
+        distance-type: COSINE
+        initialize-schema: false
+
+  # Async
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 8
+        queue-capacity: 100
+      thread-name-prefix: medora-async-
+
+  # File upload
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_MB:25}MB
+      max-request-size: ${MAX_UPLOAD_MB:25}MB
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Medora config
+medora:
+  rag:
+    top-k: 5
+    similarity-threshold: 0.6
+    chunk-size-tokens: 500
+    chunk-overlap-tokens: 50
+  chat:
+    history-turns: 6
+    temperature: 0.2
+    max-output-tokens: 800
+    llm-timeout-seconds: 60
+  prompt:
+    version: v1
+  jwt:
+    secret: ${JWT_SECRET:change-me-to-a-secure-random-secret-at-least-32-bytes}
+    access-minutes: 30
+    refresh-days: 7
+  admin:
+    email: ${ADMIN_EMAIL:admin@medora.ai}
+    password: ${ADMIN_PASSWORD:admin123}
+  emergency:
+    number: ${EMERGENCY_NUMBER:112}
+  privacy:
+    mask-pii: ${PRIVACY_MASK_PII:true}
+  store-message-text: ${STORE_MESSAGE_TEXT:true}
+  rate-limit:
+    chat-per-minute: 30
+    upload-per-hour: 10
+  uploads:
+    directory: ${UPLOADS_DIR:/data/uploads}
+
+# DevTools - disabled to avoid classloader conflicts with LangGraph4j async execution
+devtools:
+  restart:
+    enabled: false
+
+# Logging
+logging:
+  level:
+    com.medora: DEBUG
+    org.springframework.ai: DEBUG
+    org.springframework.security: INFO
