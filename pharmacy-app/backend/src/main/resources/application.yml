@@ -1,0 +1,17 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: pharmacy-backend
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/pharmacy?replicaSet=rs0
+app:
+  jwt:
+    # Change in production and load from an environment variable / vault
+    secret: ${JWT_SECRET:change-this-secret-to-a-long-random-string-of-32+chars}
+    expiry-minutes: 480
+  cors-origin: http://localhost:5173
+pharmacy:
+  max-discount-percent: 10      # cap for cashiers / pharmacists
+  manager-max-discount-percent: 50
